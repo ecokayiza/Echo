@@ -10,6 +10,7 @@ import os
 DB_PATH = Config.DB_PATH
 ###########################################
 
+# === Vector DB Interface ===
 class VectorDatabase:
     def __init__(self, collection_name: str = "rag_knowledge_base"):
         """

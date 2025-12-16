@@ -11,12 +11,19 @@ BASE_URL = Config.BASE_URL
 MODEL = Config.MODEL
 ############################################
 
-class Message:
-    def __init__(self, role: str, content: str):
-        self.role = role
-        self.content = content
-        tool_calls: 
+# === Message Model ===
+class Message(BaseModel):
+    role: str
+    content: str
+    tool_calls: Optional[List[Dict[str, Any]]] = None
 
+# === Response Model ===
+class Response(BaseModel):
+    content: str
+    token_usage: Optional[Dict[str, int]] = None #["input": int, "output": int]
+    raw_response: Any
+    
+# === Chat Model Interface ===
 class ChatModel:
     def __init__(self, api_key=API_KEY, base_url=BASE_URL, model=MODEL):
         self.client = OpenAI(api_key=api_key, base_url=base_url)

@@ -6,6 +6,7 @@ HF_TOKEN = Config.HF_TOKEN
 MODEL_ID = Config.EMBEDDING_MODEL
 ###########################################
 
+# === Embedder Interface ===
 # Embedding via HuggingFace Inference API
 class HuggingFaceEmbedder:
     @staticmethod

@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 # Get Raw Data And Extract
 ###########################################
 
+# === Basic Loader class ===
 class DataLoader(ABC):
     """
     Abstract Base Class for all data loaders.
@@ -38,6 +39,7 @@ class PDFDataLoader(DataLoader):
     def get_supported_extensions(self):
         return [".pdf"]
 
+# === Loader Interface ===
 class DataLoaderFactory:
     """
     Factory class to create appropriate DataLoader instances based on file extension.

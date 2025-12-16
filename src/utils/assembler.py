@@ -16,6 +16,7 @@ from VectorDatabase import VectorDatabase
 # x  3.delete_file:    filepath -> find records in DB -> delete records
 ##############################################
 
+# === Handles file process and interaction with vector DB ===
 class Assembler:
     db = VectorDatabase()
     
@@ -134,6 +135,3 @@ if __name__ == "__main__":
     
     for record in records:
         record.print()
-
-
-     

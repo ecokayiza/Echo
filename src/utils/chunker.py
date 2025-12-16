@@ -7,6 +7,7 @@ CHUNK_SIZE = Config.CHUNK_SIZE
 CHUNK_OVERLAP = Config.CHUNK_OVERLAP
 ###########################################
 
+# === Basic chunker ===
 class Chunker(ABC):
     @abstractmethod
     def chunk(self, text, chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP):
@@ -33,9 +34,9 @@ class MarkdownChunker(Chunker):
         )
         chunks = text_splitter.split_text(text)
         return chunks
-    
+
+# === Chunker Interface ===
 class ChunkerFactory:
-    
     @staticmethod
     def chunk(data, file_extension):
         chunker = ChunkerFactory._get_chunker(file_extension)
