@@ -2,6 +2,6 @@
 .vscode/
 # data/
 # db/
-temp/
+.temp/
 src/__pycache__/
 src/utils/__pycache__/
