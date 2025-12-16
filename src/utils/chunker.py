@@ -1,4 +1,4 @@
-from config import Config
+from Config import Config
 from abc import ABC, abstractmethod
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -57,7 +57,7 @@ class ChunkerFactory:
 if __name__ == "__main__":
     
     import os
-    from loader import DataLoaderFactory
+    from Loader import DataLoaderFactory
     file_path = Config.TEST_FILE_PATH
     try:
         data = DataLoaderFactory.load(file_path)

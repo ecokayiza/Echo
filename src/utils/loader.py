@@ -1,5 +1,5 @@
 import os
-from config import Config
+from Config import Config
 from abc import ABC, abstractmethod
 ###########################################
 # Get Raw Data And Extract

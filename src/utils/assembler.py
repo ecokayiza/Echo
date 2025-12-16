@@ -1,11 +1,11 @@
 import os
 import uuid
-from config import Config
-from shcema import RAGRecord, RAGMetadata, ExtraAttributes
-from loader import DataLoaderFactory
-from chunker import ChunkerFactory
-from embedder import HuggingFaceEmbedder            
-from vectorDatabase import VectorDatabase
+from Config import Config
+from Schema import RAGRecord, RAGMetadata, ExtraAttributes
+from Loader import DataLoaderFactory
+from Chunker import ChunkerFactory
+from Embedder import HuggingFaceEmbedder            
+from VectorDatabase import VectorDatabase
 
 
 

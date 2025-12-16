@@ -1,7 +1,7 @@
 import chromadb
 import uuid
 from typing import List, Dict, Any, Optional
-from config import Config
+from Config import Config
 import os
 
 ###########################################

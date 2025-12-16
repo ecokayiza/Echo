@@ -1,5 +1,8 @@
 from openai import OpenAI
-from config import Config
+from Config import Config
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
+
 
 ###########################################
 # We use deepseek API for main LLM services
@@ -8,6 +11,11 @@ BASE_URL = Config.BASE_URL
 MODEL = Config.MODEL
 ############################################
 
+class Message:
+    def __init__(self, role: str, content: str):
+        self.role = role
+        self.content = content
+        tool_calls: 
 
 class ChatModel:
     def __init__(self, api_key=API_KEY, base_url=BASE_URL, model=MODEL):
@@ -20,7 +28,8 @@ class ChatModel:
             messages=messages
         )
         return response.choices[0].message['content']
-    
+
+
 
 if __name__ == "__main__":
     chat_model = ChatModel()

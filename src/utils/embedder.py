@@ -1,4 +1,4 @@
-from config import Config
+from Config import Config
 from huggingface_hub import InferenceClient
 from tqdm import tqdm
 ###########################################
@@ -43,8 +43,8 @@ class HuggingFaceEmbedder:
 if __name__ == "__main__":
     file_path = Config.TEST_FILE_PATH
     import os
-    from loader import DataLoaderFactory
-    from chunker import ChunkerFactory
+    from Loader import DataLoaderFactory
+    from Chunker import ChunkerFactory
     data = DataLoaderFactory.load(file_path)
     _, ext = os.path.splitext(file_path)
     chunks = ChunkerFactory.chunk(data, ext)
