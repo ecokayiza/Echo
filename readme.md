@@ -14,7 +14,7 @@ Eco_RAG/
     ├── __init__.py         # handle interfaces for outer calls
     ├── Config.py           # Centralized configuration (Models, Paths)
     ├── Schema.py           # Defines what a "Document" looks like
-    ├── ContextManager.py   # !User Interface and Manages conversation history and context
+    ├── ContextManager.py   # Manages conversation history and context
     ├── ChatModel.py        # Handles prompt engineering and LLM calls and what Message or Response looks like
     ├── QueryProcessor.py   # !Core module to handle query routing and rewriting
     ├── Retriever.py        # Retrieves relevant documents from vector DB
@@ -29,11 +29,11 @@ Eco_RAG/
 
 ##### Flow
 ```
-                                                            System  ->  data      
-                                                                         ↓
-User -> ContextManager -> ChatModel -> QueryProcessor -> Retriever <-> Assembler <-> VectorDB
-                                          ^                      |
-                                          └ Iterate <- Adapter <-┘
-                                                          |
-User <- ContextManager <- ChatModel <---------------------┘(final context)
+                                                      System  ->  data      
+                                  (Pre process)                    ↓
+User -> System -> ChatModel -> QueryProcessor -> Retriever <-> Assembler <-> VectorDB
+                      |           ↑                      |
+                ContextManager    └ Iterate <- Adapter <-┘
+                      |                           |(also for Post process like ranking)
+User <- System <- ChatModel <---------------------┘(final context)
 ```
