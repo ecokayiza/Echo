@@ -14,11 +14,11 @@ Eco_RAG/
     ├── __init__.py         # handle interfaces for outer calls
     ├── Config.py           # Centralized configuration (Models, Paths)
     ├── Schema.py           # Defines what a "Document" looks like
-    ├── ContextManager.py   # Manages conversation history and context
+    ├── ContextManager.py   # !Core. Manages conversation history and Judges on response
     ├── ChatModel.py        # Handles prompt engineering and LLM calls and what Message or Response looks like
-    ├── QueryProcessor.py   # !Core module to handle query routing and rewriting
+    ├── QueryProcessor.py   # !Core. Handle query. Routing and Rewriting
     ├── Retriever.py        # Retrieves relevant documents from vector DB
-    ├── Adapter.py          # !Process query results between Retriever and ChatModel, also iterate query if needed
+    ├── Adapter.py          # !Core. Process query results between Retriever and ChatModel, also iterate query if needed
     └── utils/
         ├── __init__.py
         ├── Assembler.py    # Handles files process and interaction with vector DB
@@ -31,9 +31,12 @@ Eco_RAG/
 ```
                                                       System  ->  data      
                                   (Pre process)                    ↓
-User -> System -> ChatModel -> QueryProcessor -> Retriever <-> Assembler <-> VectorDB
-                      |           ↑                      |
-                ContextManager    └ Iterate <- Adapter <-┘
-                      |                           |(also for Post process like ranking)
-User <- System <- ChatModel <---------------------┘(final context)
+User -> System ---------------> QueryProcessor -> Retriever <-> Assembler <-> VectorDB
+                                ↑     1|  ↑              |
+            --   ContextManager ┘3     |  └-- Adapter ---┘
+            ↓         |                ↓        2| (also for Post process like ranking)
+User <- System    ChatModel <--------------------┘ (final context)
 ```
+1: Query route, no retrival needed.
+2: Judge on retrieved results.
+3: Judge on generated response.

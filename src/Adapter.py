@@ -1,6 +1,11 @@
 
 
 ############################################
+# !Core
 # Process Query result
-# Retreiver -> Adapter -> ChatModel
+# INPUT:
+#   - Retrieved documents from Retriever
+# OUTPUT:
+#   - To Model                    (Documents ready)
+#   - To QueryProcessor           (Bad Retrieval) 
 ############################################
