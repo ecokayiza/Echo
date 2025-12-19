@@ -1,6 +1,7 @@
 from Config import Config
 from huggingface_hub import InferenceClient
 from tqdm import tqdm
+from functools import lru_cache
 ###########################################
 HF_TOKEN = Config.HF_TOKEN
 MODEL_ID = Config.EMBEDDING_MODEL
@@ -10,6 +11,7 @@ MODEL_ID = Config.EMBEDDING_MODEL
 # Embedding via HuggingFace Inference API
 class HuggingFaceEmbedder:
     @staticmethod
+    @lru_cache(maxsize=128)
     def embed(data, model_id=MODEL_ID, hf_token=HF_TOKEN):
         """
         Embed chunks to vectors using HuggingFace Inference API
