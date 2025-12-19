@@ -129,6 +129,13 @@ if __name__ == "__main__":
     
     text = ["智能体采取的动作"]
     embedding = HuggingFaceEmbedder.embed(text)[0]
+    # cache test
+    # import time
+    # strart = time.time()
+    # for _ in range(10):
+    #     embedding = HuggingFaceEmbedder.embed(text)[0]
+    # end_time = time.time()
+    # print("Average embedding time:", (end_time - strart)/10)
     results = Assembler.query_with_vector(embedding, n_results=5)
     records = RAGRecord.get_records_from_results(results)
     # records = RAGRecord.sort_by_distance(records)
