@@ -37,6 +37,8 @@ User -> System ---------------> Orchestrator -> Retriever <-> Assembler <-> Vect
             ↓         |                ↓        2| (also for Post process like ranking)
 User <- System    ChatModel <--------------------┘ (final context)
 ```
+```
 1: Query route.                 Also for Recursive Retrival.  -> sub-problems
 2: Judge on retrieved results.  Also for Iterative Retrival.  -> more context
 3: Judge on generated response. Also for Adaptive generation. -> regenerate or stop
+```
