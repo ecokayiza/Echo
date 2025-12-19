@@ -16,10 +16,10 @@ Eco_RAG/
     ├── Schema.py           # Defines what a "Document" looks like
     ├── ContextManager.py   # !Core. Manages conversation history and Judges on response
     ├── ChatModel.py        # Handles prompt engineering and LLM calls and what Message or Response looks like
-    ├── QueryProcessor.py   # !Core. Handle query. Routing and Rewriting
+    ├── Orchestrator.py     # !Core. Handle query. Routing and Rewriting
     ├── Retriever.py        # Retrieves relevant documents from vector DB
     ├── Adapter.py          # !Core. Process query results between Retriever and ChatModel, also iterate query if needed
-    └── utils/
+    └── indexing/
         ├── __init__.py
         ├── Assembler.py    # Handles files process and interaction with vector DB
         └── ...             
@@ -31,12 +31,12 @@ Eco_RAG/
 ```
                                                       System  ->  data      
                                   (Pre process)                    ↓
-User -> System ---------------> QueryProcessor -> Retriever <-> Assembler <-> VectorDB
+User -> System ---------------> Orchestrator -> Retriever <-> Assembler <-> VectorDB
                                 ↑     1|  ↑              |
             --   ContextManager ┘3     |  └-- Adapter ---┘
             ↓         |                ↓        2| (also for Post process like ranking)
 User <- System    ChatModel <--------------------┘ (final context)
 ```
-1: Query route, no retrival needed.
-2: Judge on retrieved results.
-3: Judge on generated response.
+1: Query route.                 Also for Recursive Retrival.  -> sub-problems
+2: Judge on retrieved results.  Also for Iterative Retrival.  -> more context
+3: Judge on generated response. Also for Adaptive generation. -> regenerate or stop
