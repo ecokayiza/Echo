@@ -32,8 +32,8 @@ Eco_RAG/
 ```
                                                 System  ->  data      
                             (Pre Process)                    ↓
-User -> System ---------------> QueryProcessor -> Retriever <-> Assembler <-> VectorDB
-                                ↑     1|  ↑              |
+User -> System ---------------> QueryProcessor -> Retriever <-> Assembler <-> VectorDB 
+                                ↑     1|  ↑              |(Sparse+Dense)            (Graph?)
             ┌-   ContextManager ┘3     |  └-- Adapter ---┘
             ↓         |                ↓        2| (Rerank and Format)
 User <- System    ChatModel <--------------------┘ (Final context)
@@ -53,3 +53,13 @@ User Profile steps in:
 2: Personalized Document Ranking.        -> user preference
 4: Personalized Response Generation.     -> user tone
 ```
+
+### TODO
+  - [x] Basic Indexing and API calls
+  - [ ] ChatModel and Context
+  - [ ] Longterm、Recent、Task Memory
+  - [ ] Retriever:Sparse + Dense Hybrid Retrieval
+  - [ ] Adapter and Rerank
+  - [ ] QueryProcessor and Orchestrator 
+  - [ ] Tracing and Evaluation methods 
+  - [ ] Record update(citation) and Graph?
