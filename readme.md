@@ -63,3 +63,6 @@ User Profile steps in:
   - [ ] QueryProcessor and Orchestrator 
   - [ ] Tracing and Evaluation methods 
   - [ ] Record update(citation) and Graph?
+  - [ ] Integrate Web Search?
+  - [ ] User Profile and Personalization?
+  - [ ] Web UI

@@ -2,12 +2,6 @@ import os
 import uuid
 from Config import Config
 from Schema import RAGRecord, RAGMetadata, ExtraAttributes
-from Loader import DataLoaderFactory
-from Chunker import ChunkerFactory
-from Embedder import HuggingFaceEmbedder            
-from VectorDatabase import VectorDatabase
-
-
 
 # This is the interface for outer files
 # provide APIs to finish one whole process like:
@@ -18,29 +12,31 @@ from VectorDatabase import VectorDatabase
 
 # === Handles file process and interaction with vector DB ===
 class Assembler:
-    db = VectorDatabase()
+    # === Components ===
+    def __init__(self,vector_db,data_loader,chunker,embedder):
+        self.db = vector_db
+        self.data_loader = data_loader
+        self.chunker = chunker
+        self.embedder = embedder
     
-    @staticmethod
-    def store_file(filepath):
+    def store_file(self, filepath):
         """
         Store file to vdb.
         filepath: should be absolute path.
         """
-        records = Assembler._get_records(filepath)
-        Assembler._records_to_db(records, Assembler.db)
+        records = self._get_records(filepath)
+        self._records_to_db(records)
     
-    @staticmethod
-    def delete_file(filepath):
+    def delete_file(self, filepath):
         """
         Delete file from vdb.
         filepath: should be absolute path.
         """
         rel_path = Config.get_relative_path(filepath)
         where = {"file_path": rel_path}
-        Assembler.db.delete_documents(where)
+        self.db.delete_documents(where)
         
-    @staticmethod
-    def query_file(filepath):
+    def query_file(self, filepath):
         """
         Query file from vdb.
         Args:
@@ -51,31 +47,29 @@ class Assembler:
         """
         rel_path = Config.get_relative_path(filepath)
         where = {"file_path": rel_path}
-        results = Assembler.db.query_by_metadata(where, n_results=99999999)
+        results = self.db.query_by_metadata(where, n_results=99999999)
         print(f"Found {len(results.get('documents', []))} documents for file: {rel_path}")
         return results
     
-    @staticmethod
-    def query_with_vector(vector, n_results=5, where=None):
+    def query_with_vector(self, vector, n_results=5, where=None):
         """
         Query similar documents based on **one** query vector
         """
-        results = Assembler.db.query_with_vector(vector, n_results, where)
+        results = self.db.query_with_vector(vector, n_results, where)
         # results['documents'] is a list of lists, so we check the length of the first list
         doc_count = len(results.get('documents', [[]])[0])
         print(f"Found {doc_count} documents for the query vector.")
         return results
     
-    @staticmethod
-    def _get_records(file_path):
+    def _get_records(self, file_path):
         """
         Get records objects from file_path, to create a record, we need:
             chunk text, embedding vector, metadata
         """
         _,ext = os.path.splitext(file_path)
-        data = DataLoaderFactory.load(file_path)
-        chunks = ChunkerFactory.chunk(data, ext)
-        embeddings = HuggingFaceEmbedder.embed(chunks)
+        data = self.data_loader.load(file_path)
+        chunks = self.chunker.chunk(data, ext)
+        embeddings = self.embedder.embed(chunks)
         
         records = []
         for idx, chunk in enumerate(chunks):
@@ -98,15 +92,14 @@ class Assembler:
             records.append(record)
         return records
     
-    @staticmethod
-    def _records_to_db(records,db):
+    def _records_to_db(self, records):
         """
         Insert records to vector DB
         """
         formatted_records = [r.to_db_format() for r in records]
         
         if formatted_records:
-            db.add_documents(
+            self.db.add_documents(
                 ids=[r["id"] for r in formatted_records],
                 texts=[r["document"] for r in formatted_records],
                 embeddings=[r["vector"] for r in formatted_records],
@@ -114,21 +107,30 @@ class Assembler:
             )
     
 if __name__ == "__main__":
+    from Loader import DataLoaderFactory
+    from Chunker import ChunkerFactory
+    from Embedder import HuggingFaceEmbedder            
+    from VectorDatabase import VectorDatabase
     file_path = Config.TEST_FILE_PATH
+    vector_db = VectorDatabase()
+    data_loader = DataLoaderFactory()
+    chunker = ChunkerFactory()
+    embedder = HuggingFaceEmbedder()
+    assembler = Assembler(vector_db, data_loader, chunker, embedder)
     
-    # print("Dpocument count in DB before storing file:", Assembler.db.count())
-    # Assembler.store_file(file_path)
-    # print("Document count in DB after storing file:", Assembler.db.count())
+    # print("Dpocument count in DB before storing file:", assembler.db.count())
+    # assembler.store_file(file_path)
+    # print("Document count in DB after storing file:", assembler.db.count())
     
-    # print("Document count in DB before deleting file:", Assembler.db.count())
-    # Assembler.delete_file(file_path)
-    # print("Document count in DB after deleting file:", Assembler.db.count())
+    # print("Document count in DB before deleting file:", assembler.db.count())
+    # assembler.delete_file(file_path)
+    # print("Document count in DB after deleting file:", assembler.db.count())
     
-    # results = Assembler.query_file(file_path)
+    # results = assembler.query_file(file_path)
     # records = RAGRecord.get_records_from_results(results)
     
     text = ["智能体采取的动作"]
-    embedding = HuggingFaceEmbedder.embed(text)[0]
+    embedding = embedder.embed(text)[0]
     # cache test
     # import time
     # strart = time.time()
@@ -136,7 +138,7 @@ if __name__ == "__main__":
     #     embedding = HuggingFaceEmbedder.embed(text)[0]
     # end_time = time.time()
     # print("Average embedding time:", (end_time - strart)/10)
-    results = Assembler.query_with_vector(embedding, n_results=5)
+    results = assembler.query_with_vector(embedding, n_results=5)
     records = RAGRecord.get_records_from_results(results)
     # records = RAGRecord.sort_by_distance(records)
     
