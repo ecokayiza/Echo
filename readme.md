@@ -14,9 +14,10 @@ Eco_RAG/
     ├── __init__.py         # handle interfaces for outer calls
     ├── Config.py           # Centralized configuration (Models, Paths)
     ├── Schema.py           # Defines what a "Document" looks like
-    ├── ContextManager.py   # !Core. Manages conversation history and Judges on response
+    ├── Orchestrator.py     # !Core. Judge overall flow control
+    ├── ContextManager.py   # !Core. Manages conversation history
     ├── ChatModel.py        # Handles prompt engineering and LLM calls and what Message or Response looks like
-    ├── Orchestrator.py     # !Core. Handle query. Routing and Rewriting
+    ├── QueryProcessor.py   # !Core. Handle query. Routing and Rewriting
     ├── Retriever.py        # Retrieves relevant documents from vector DB
     ├── Adapter.py          # !Core. Process query results between Retriever and ChatModel, also iterate query if needed
     └── indexing/
@@ -29,16 +30,26 @@ Eco_RAG/
 
 ##### Flow
 ```
-                                                      System  ->  data      
-                                  (Pre process)                    ↓
-User -> System ---------------> Orchestrator -> Retriever <-> Assembler <-> VectorDB
+                                                System  ->  data      
+                            (Pre Process)                    ↓
+User -> System ---------------> QueryProcessor -> Retriever <-> Assembler <-> VectorDB
                                 ↑     1|  ↑              |
-            --   ContextManager ┘3     |  └-- Adapter ---┘
-            ↓         |                ↓        2| (also for Post process like ranking)
-User <- System    ChatModel <--------------------┘ (final context)
+            ┌-   ContextManager ┘3     |  └-- Adapter ---┘
+            ↓         |                ↓        2| (Rerank and Format)
+User <- System    ChatModel <--------------------┘ (Final context)
+                          4
 ```
+
+Orchestrator(LLM) steps in:
 ```
 1: Query route.                 Also for Recursive Retrival.  -> sub-problems
 2: Judge on retrieved results.  Also for Iterative Retrival.  -> more context
 3: Judge on generated response. Also for Adaptive generation. -> regenerate or stop
+```
+
+User Profile steps in:
+```
+1: Personalized Query Rewriting.         -> user style
+2: Personalized Document Ranking.        -> user preference
+4: Personalized Response Generation.     -> user tone
 ```
