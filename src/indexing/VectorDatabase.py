@@ -54,12 +54,12 @@ class VectorDatabase:
         except Exception as e:
             print(f"Error upserting documents: {e}")
     
-    def query_by_metadata(self, where: Dict[str, Any], n_results: int = 5):
+    def query_by_metadata(self, where: Dict[str, Any], n_results: int = None):
         """
         Query documents based on metadata filtering
         Args:
             where: Filter conditions, e.g., {"source_type": "pdf"}
-            n_results: Number of similar chunks to retrieve
+            n_results: Number of similar chunks to retrieve (None means no limit)
         Returns:
             A dictionary with query results, no distance included
             like {'document_ids': [...], 'documents': [...], 'metadatas': [...]

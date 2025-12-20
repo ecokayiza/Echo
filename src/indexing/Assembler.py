@@ -47,7 +47,7 @@ class Assembler:
         """
         rel_path = Config.get_relative_path(filepath)
         where = {"file_path": rel_path}
-        results = self.db.query_by_metadata(where, n_results=99999999)
+        results = self.db.query_by_metadata(where, n_results=None)
         print(f"Found {len(results.get('documents', []))} documents for file: {rel_path}")
         return results
     
