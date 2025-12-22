@@ -39,7 +39,7 @@ User -> System ---------------> QueryProcessor -> Retriever <-> Assembler <-> Ve
 User <- System    ChatModel <--------------------┘ (Final context)
                           4
 ```
-
+                                                                                            
 Orchestrator(LLM) steps in:
 ```
 1: Query route.                 Also for Recursive Retrival.  -> sub-problems
