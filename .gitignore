@@ -2,7 +2,14 @@
 .vscode/
 db/
 temp/
-src/__pycache__/
-src/indexing/__pycache__/
-src/utils/__pycache__/
 data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+apps/web/node_modules/
+apps/desktop/src-tauri/target/
+memory/chat_sessions/*
+!memory/chat_sessions/.gitkeep
+memory/artifacts/*
+!memory/artifacts/.gitkeep
