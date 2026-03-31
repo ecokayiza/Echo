@@ -1,8 +1,8 @@
 .env
 .vscode/
-# data/
 db/
 temp/
 src/__pycache__/
 src/indexing/__pycache__/
 src/utils/__pycache__/
+data/
