@@ -1,9 +1,11 @@
-from openai import AsyncOpenAI
 import asyncio
-from typing import Optional, List, Dict, Any, AsyncIterator, Type
-
-from pydantic import BaseModel
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from typing import Optional, List, Dict, Any, AsyncIterator, Type
+from uuid import uuid4
+
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field, model_validator
 
 from ..config import Config
 
@@ -17,9 +19,24 @@ MODEL = Config.MODEL
 
 # === Message Model ===
 class Message(BaseModel):
-    role: str       # "system", "user", "assistant", "tool"
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    role: str
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @model_validator(mode="after")
+    def ensure_timestamps(self):
+        if not self.updated_at:
+            self.updated_at = self.created_at
+        return self
+
+    def to_llm_message(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"role": self.role, "content": self.content}
+        if self.tool_calls:
+            payload["tool_calls"] = self.tool_calls
+        return payload
 
 # === Response Model ===
 class Response(BaseModel):

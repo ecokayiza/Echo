@@ -29,5 +29,6 @@ Eco_RAG/
 - `eco_rag/workflows/state.py` defines typed run status and step state.
 - `eco_rag/tracing/` provides event streaming primitives.
 - `eco_rag/chat/registry.py` is the first extension point for multiple chat-model providers.
-- `eco_rag/chat/context_manager.py` now owns session memory with pluggable storage and memory-selection policy.
-- `eco_rag/chat/FileMessageStore` persists sessions under `memory/chat_sessions/` by default.
+- `eco_rag/chat/context_manager.py` owns session memory, session metadata, and message mutation rules.
+- `eco_rag/chat/FileSessionStore` persists sessions under `memory/chat_sessions/` by default.
+- `apps/api/app/main.py` exposes a session-first chat API for the development UI.

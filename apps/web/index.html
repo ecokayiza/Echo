@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Eco_RAG Chat</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="backdrop backdrop-a"></div>
+  <div class="backdrop backdrop-b"></div>
+  <div class="shell">
+    <aside class="panel panel-sidebar">
+      <div class="brand-block">
+        <p class="eyebrow">Eco_RAG</p>
+        <h1>Chat Workspace</h1>
+        <p class="lede">
+          Session-aware chat with persistent memory, message controls, and a simple development-friendly UI.
+        </p>
+      </div>
+
+      <section class="sidebar-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Sessions</p>
+            <h3>Conversations</h3>
+          </div>
+          <button id="newSessionButton" class="button button-primary" type="button">New</button>
+        </div>
+
+        <div id="sessionList" class="session-list"></div>
+
+        <div class="button-row">
+          <button id="renameSessionButton" class="button button-secondary" type="button">Rename</button>
+          <button id="deleteSessionButton" class="button button-secondary button-danger" type="button">Delete</button>
+        </div>
+      </section>
+
+      <div class="meta-card">
+        <div class="meta-row">
+          <span>Model</span>
+          <strong id="modelName">Loading...</strong>
+        </div>
+        <div class="meta-row">
+          <span>Session</span>
+          <code id="sessionId">...</code>
+        </div>
+        <div class="meta-row">
+          <span>Status</span>
+          <strong id="statusText">Connecting...</strong>
+        </div>
+      </div>
+
+      <label class="field">
+        <span>System Prompt</span>
+        <textarea id="systemPrompt" rows="6"></textarea>
+      </label>
+
+      <p class="sidebar-note">
+        Sessions are stored on disk under <code>memory/chat_sessions</code>. Editing or deleting an older message trims the turns after it so the conversation stays consistent.
+      </p>
+    </aside>
+
+    <main class="panel panel-chat">
+      <header class="chat-header">
+        <div>
+          <p class="eyebrow">Assistant</p>
+          <h2 id="activeSessionTitle">New Session</h2>
+        </div>
+        <div class="live-pill">
+          <span class="live-dot"></span>
+          <span id="liveLabel">Ready</span>
+        </div>
+      </header>
+
+      <section id="messages" class="messages" aria-live="polite">
+        <div class="empty-state">
+          <p>Start a conversation to create the first meaningful session.</p>
+        </div>
+      </section>
+
+      <form id="composer" class="composer">
+        <label class="composer-field">
+          <span class="sr-only">Message</span>
+          <textarea id="messageInput" rows="3" placeholder="Ask anything about your docs, pipeline, or architecture..." required></textarea>
+        </label>
+        <div class="composer-actions">
+          <p class="hint">Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to send</p>
+          <button id="sendButton" class="button button-primary" type="submit">Send</button>
+        </div>
+      </form>
+    </main>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -25,6 +25,9 @@ def build_chat_model(settings: ChatModelSettings | None = None) -> BaseChatModel
         supported = ", ".join(sorted(providers))
         raise ValueError(f"Unsupported chat provider '{resolved.provider}'. Supported providers: {supported}") from exc
 
+    if not resolved.api_key:
+        raise ValueError("Missing API key. Set API_KEY or OPENAI_API_KEY in your environment or .env file.")
+
     return model_cls(
         api_key=resolved.api_key,
         base_url=resolved.base_url,

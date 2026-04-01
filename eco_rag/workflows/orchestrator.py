@@ -10,7 +10,7 @@ from .state import ChatRunState, WorkflowStatus, WorkflowStep
 # Interact With:
 #   - QueryProcessor    (Query Level)
 #   - Adapter           (Retrival Level)
-#   - ContextManager    (Response Level)
+#   - Sessions/Messages (Response Level)
 #   - ChatModel         (Prompt Level)
 # Extra Injection:
 #   - User Profile.

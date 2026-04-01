@@ -3,15 +3,16 @@ from .orchestrator import Orchestrator
 from .query_processor import QueryProcessor
 from .retriever import Retriever
 from .state import ChatRunState, StepState, WorkflowStatus, WorkflowStep
-from ..chat import ContextManager
+from ..chat import Messages, Sessions
 
 __all__ = [
     "Adapter",
     "ChatRunState",
-    "ContextManager",
+    "Messages",
     "Orchestrator",
     "QueryProcessor",
     "Retriever",
+    "Sessions",
     "StepState",
     "WorkflowStatus",
     "WorkflowStep",
