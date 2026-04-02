@@ -49,15 +49,69 @@
           <span>Status</span>
           <strong id="statusText">Connecting...</strong>
         </div>
+        <div class="meta-row">
+          <span>Prompt Tokens</span>
+          <strong id="promptTokens">0</strong>
+        </div>
+        <div class="meta-row">
+          <span>Content Tokens</span>
+          <strong id="contentTokens">0</strong>
+        </div>
+        <div class="meta-row">
+          <span>Total Tokens</span>
+          <strong id="totalTokens">0</strong>
+        </div>
+        <div class="meta-row">
+          <span>Cache Hit Tokens</span>
+          <strong id="cacheHitTokens">0</strong>
+        </div>
       </div>
 
       <label class="field">
         <span>System Prompt</span>
         <textarea id="systemPrompt" rows="6"></textarea>
       </label>
+      <div class="button-row">
+        <button id="applySystemPromptButton" class="button button-secondary" type="button">Apply Prompt</button>
+      </div>
+
+      <section class="sidebar-section">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Model</p>
+            <h3>Settings</h3>
+          </div>
+          <button id="saveModelSettingsButton" class="button button-secondary" type="button">Save</button>
+        </div>
+
+        <label class="field">
+          <span>Provider</span>
+          <input id="providerInput" type="text" value="openai_compatible">
+        </label>
+
+        <label class="field">
+          <span>Model Name</span>
+          <input id="modelInput" type="text" placeholder="deepseek-chat">
+        </label>
+
+        <label class="field">
+          <span>Base URL</span>
+          <input id="baseUrlInput" type="text" placeholder="https://api.deepseek.com">
+        </label>
+
+        <label class="field">
+          <span>API Key</span>
+          <input id="apiKeyInput" type="password" placeholder="Optional override">
+        </label>
+
+        <label class="field">
+          <span>Temperature</span>
+          <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="1.0">
+        </label>
+      </section>
 
       <p class="sidebar-note">
-        Sessions are stored on disk under <code>memory/chat_sessions</code>. Editing or deleting an older message trims the turns after it so the conversation stays consistent.
+        Sessions are stored on disk under <code>memory/chat_sessions</code>. System prompt changes apply only when you click the button, and chat replies stream into the UI by default.
       </p>
     </aside>
 

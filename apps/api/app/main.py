@@ -1,12 +1,15 @@
+import json
 from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from eco_rag.chat import ChatService
+from eco_rag.chat.registry import ChatModelSettings
 from eco_rag.config import Config
 from eco_rag.workflows.state import WorkflowStatus, WorkflowStep
 
@@ -24,6 +27,8 @@ class SessionSummaryResponse(BaseModel):
     updated_at: str
     message_count: int = 0
     preview: str = ""
+    token_usage: dict[str, Any] = Field(default_factory=dict)
+    total_tokens: int = 0
 
 
 class SessionStateResponse(BaseModel):
@@ -45,13 +50,43 @@ class UpdateSessionRequest(BaseModel):
     title: str = Field(min_length=1)
 
 
+class UpdateSystemPromptRequest(BaseModel):
+    content: str | None = None
+
+
+class ChatModelSettingsRequest(BaseModel):
+    provider: str = "openai_compatible"
+    model: str | None = Config.MODEL
+    api_key: str | None = None
+    base_url: str | None = Config.BASE_URL
+    temperature: float = 1.0
+
+    def to_settings(self) -> ChatModelSettings:
+        return ChatModelSettings(
+            provider=self.provider,
+            model=self.model,
+            api_key=self.api_key or Config.API_KEY,
+            base_url=self.base_url,
+            temperature=self.temperature,
+        )
+
+
 class SendMessageRequest(BaseModel):
     message: str = Field(min_length=1)
-    system_prompt: str | None = DEFAULT_SYSTEM_PROMPT
+    system_prompt: str | None = None
+    settings: ChatModelSettingsRequest | None = None
 
 
 class UpdateMessageRequest(BaseModel):
     content: str = Field(min_length=1)
+
+
+class RegenerateMessageRequest(BaseModel):
+    settings: ChatModelSettingsRequest | None = None
+
+
+def to_sse(event: str, payload: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 def create_app(chat_service: ChatService | None = None):
@@ -76,6 +111,7 @@ def create_app(chat_service: ChatService | None = None):
             "workflow_statuses": [status.value for status in WorkflowStatus],
             "workflow_steps": [step.value for step in WorkflowStep],
             "default_system_prompt": DEFAULT_SYSTEM_PROMPT,
+            "default_chat_settings": ChatModelSettingsRequest().model_dump(),
         }
 
     @app.get("/api/sessions", response_model=list[SessionSummaryResponse])
@@ -104,6 +140,14 @@ def create_app(chat_service: ChatService | None = None):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SessionSummaryResponse(**session)
 
+    @app.patch("/api/sessions/{session_id}/system-prompt", response_model=SessionStateResponse)
+    async def update_system_prompt(session_id: str, payload: UpdateSystemPromptRequest):
+        try:
+            state = await service.update_system_prompt(session_id, payload.content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return SessionStateResponse(**state.to_dict())
+
     @app.delete("/api/sessions/{session_id}")
     def delete_session(session_id: str):
         service.delete_session(session_id)
@@ -116,12 +160,36 @@ def create_app(chat_service: ChatService | None = None):
                 message=payload.message,
                 session_id=session_id,
                 system_prompt=payload.system_prompt,
+                settings=payload.settings.to_settings() if payload.settings else None,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Chat request failed: {exc}") from exc
         return ChatResponse(**result.to_dict())
+
+    @app.post("/api/sessions/{session_id}/messages/stream")
+    async def stream_message(session_id: str, payload: SendMessageRequest):
+        try:
+            stream = service.stream_message(
+                message=payload.message,
+                session_id=session_id,
+                system_prompt=payload.system_prompt,
+                settings=payload.settings.to_settings() if payload.settings else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        async def event_stream():
+            try:
+                async for item in stream:
+                    yield to_sse(item["event"], item["data"])
+            except ValueError as exc:
+                yield to_sse("error", {"detail": str(exc)})
+            except Exception as exc:
+                yield to_sse("error", {"detail": f"Chat request failed: {exc}"})
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.patch("/api/sessions/{session_id}/messages/{message_id}", response_model=SessionStateResponse)
     async def update_message(session_id: str, message_id: str, payload: UpdateMessageRequest):
@@ -148,14 +216,48 @@ def create_app(chat_service: ChatService | None = None):
         return SessionStateResponse(**state.to_dict())
 
     @app.post("/api/sessions/{session_id}/messages/{message_id}/regenerate", response_model=ChatResponse)
-    async def regenerate_message(session_id: str, message_id: str):
+    async def regenerate_message(
+        session_id: str,
+        message_id: str,
+        payload: RegenerateMessageRequest | None = None,
+    ):
         try:
-            result = await service.regenerate_message(session_id, message_id)
+            result = await service.regenerate_message(
+                session_id,
+                message_id,
+                settings=payload.settings.to_settings() if payload and payload.settings else None,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Chat request failed: {exc}") from exc
         return ChatResponse(**result.to_dict())
+
+    @app.post("/api/sessions/{session_id}/messages/{message_id}/regenerate/stream")
+    async def stream_regenerate_message(
+        session_id: str,
+        message_id: str,
+        payload: RegenerateMessageRequest | None = None,
+    ):
+        try:
+            stream = service.stream_regenerate_message(
+                session_id,
+                message_id,
+                settings=payload.settings.to_settings() if payload and payload.settings else None,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        async def event_stream():
+            try:
+                async for item in stream:
+                    yield to_sse(item["event"], item["data"])
+            except ValueError as exc:
+                yield to_sse("error", {"detail": str(exc)})
+            except Exception as exc:
+                yield to_sse("error", {"detail": f"Chat request failed: {exc}"})
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     if WEB_DIR.exists():
         app.mount("/ui", StaticFiles(directory=str(WEB_DIR), html=True), name="web")

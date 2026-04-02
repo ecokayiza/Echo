@@ -229,9 +229,9 @@ kbd {
   font-weight: 600;
 }
 
-textarea {
+textarea,
+input {
   width: 100%;
-  resize: vertical;
   border: 1px solid rgba(38, 69, 49, 0.15);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.86);
@@ -242,7 +242,12 @@ textarea {
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
 
-textarea:focus {
+textarea {
+  resize: vertical;
+}
+
+textarea:focus,
+input:focus {
   border-color: rgba(31, 106, 70, 0.45);
   box-shadow: 0 0 0 4px rgba(31, 106, 70, 0.12);
 }
@@ -364,6 +369,12 @@ textarea:focus {
   font-size: 0.72rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+  color: var(--muted);
+}
+
+.message-usage {
+  margin-top: 0.65rem;
+  font-size: 0.8rem;
   color: var(--muted);
 }
 

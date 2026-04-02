@@ -1,56 +1,51 @@
-import asyncio
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any, AsyncIterator, Type
+from typing import Any, AsyncIterator, Dict, List, Optional
 from uuid import uuid4
 
 from openai import AsyncOpenAI
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from ..config import Config
 
-###########################################
-# We use deepseek API for main LLM services
-# We use async client which is more suitable for web servers
-API_KEY = Config.API_KEY
-BASE_URL = Config.BASE_URL
-MODEL = Config.MODEL
-############################################
+USAGE_KEYS = ("prompt_tokens", "prompt_cache_hit_tokens", "completion_tokens", "total_tokens")
 
-# === Message Model ===
+
 class Message(BaseModel):
+    """Store one chat message."""
+
     id: str = Field(default_factory=lambda: str(uuid4()))
     role: str
     content: str
     tool_calls: Optional[List[Dict[str, Any]]] = None
-    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
-    @model_validator(mode="after")
-    def ensure_timestamps(self):
-        if not self.updated_at:
-            self.updated_at = self.created_at
-        return self
+    token_usage: Optional[Dict[str, Any]] = None
 
     def to_llm_message(self) -> Dict[str, Any]:
+        """Convert one message into the provider payload shape."""
         payload: Dict[str, Any] = {"role": self.role, "content": self.content}
         if self.tool_calls:
             payload["tool_calls"] = self.tool_calls
         return payload
 
-# === Response Model ===
+
 class Response(BaseModel):
+    """Store one model response."""
+
     content: str
     token_usage: Optional[Dict[str, Any]] = None
     raw_response: Any
 
-# === Utility Function for Usage Conversion ===
+
+def _number(value: Any) -> int | float | None:
+    """Return numeric values and ignore everything else."""
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
 def _usage_to_dict(usage: Any) -> Optional[Dict[str, Any]]:
+    """Convert provider usage objects into plain dictionaries."""
     if usage is None:
         return None
     if isinstance(usage, dict):
         return usage
-    # openai-python v1 returns a pydantic-like model for usage (e.g. CompletionUsage)
     model_dump = getattr(usage, "model_dump", None)
     if callable(model_dump):
         return model_dump()
@@ -59,103 +54,121 @@ def _usage_to_dict(usage: Any) -> Optional[Dict[str, Any]]:
         return to_dict()
     if hasattr(usage, "__dict__"):
         return dict(usage.__dict__)
-    return {"usage": str(usage)}
+    return None
 
-############################################
-# We need structured outputs and tool function calls for a RAG system
-# We also need token usage tracking and callbacks tracking
-############################################
 
-# === Basic Chat Model Interface Definition ===
+def normalize_token_usage(usage: Any) -> Optional[Dict[str, Any]]:
+    """Keep only prompt, cache, completion, and total token counters."""
+    payload = _usage_to_dict(usage)
+    if not payload:
+        return None
+
+    prompt_tokens = _number(payload.get("prompt_tokens"))
+    completion_tokens = _number(payload.get("completion_tokens"))
+    total_tokens = _number(payload.get("total_tokens"))
+    prompt_cache_hit_tokens = _number(payload.get("prompt_cache_hit_tokens"))
+
+    if prompt_cache_hit_tokens is None:
+        prompt_details = payload.get("prompt_tokens_details")
+        if isinstance(prompt_details, dict):
+            prompt_cache_hit_tokens = _number(prompt_details.get("cached_tokens"))
+
+    values = {
+        "prompt_tokens": prompt_tokens or 0,
+        "prompt_cache_hit_tokens": prompt_cache_hit_tokens or 0,
+        "completion_tokens": completion_tokens or 0,
+        "total_tokens": total_tokens if total_tokens is not None else (prompt_tokens or 0) + (completion_tokens or 0),
+    }
+    return values if any(values[key] for key in USAGE_KEYS) else None
+
+
 class BaseChatModel(ABC):
-    def __init__(self, api_key=API_KEY, base_url=BASE_URL, model=MODEL, temperature=1.0):
+    """Define the chat model interface used by the app."""
+
+    def __init__(
+        self,
+        api_key: str | None = Config.API_KEY,
+        base_url: str | None = Config.BASE_URL,
+        model: str | None = Config.MODEL,
+        temperature: float = 1.0,
+    ):
+        """Create the shared provider client."""
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.temperature = temperature
 
     @abstractmethod
-    async def generate_response(self, messages: List[Dict[str, str]],
-                                tools:Optional[List[Dict]]=None,
-                                stop:Optional[List[str]]=None,
-                                callbacks:Optional[Any]=None,
-                                **kwargs
-                                ) -> Response:
-        """Generate a response from the chat model given a list of messages."""
-        pass
-    
-    @abstractmethod
-    async def stream_response(self, messages: List[Dict[str, str]],
-                                tools:Optional[List[Dict]]=None,
-                                stop:Optional[List[str]]=None,
-                                callbacks:Optional[Any]=None,
-                                **kwargs
-                              ) -> AsyncIterator[str]:
-        """Stream a response from the chat model given a list of messages."""
-        pass
-    
-    @abstractmethod
-    async def structured_response(self, messages: List[Dict[str, str]],
-                                  response_model: Type[BaseModel]
-                                  ) -> BaseModel:
-        """Generate a structured response conforming to the given response model."""
-        pass
+    async def generate_response(
+        self,
+        messages: List[Dict[str, str]],
+        tools: Optional[List[Dict]] = None,
+        stop: Optional[List[str]] = None,
+        callbacks: Optional[Any] = None,
+        **kwargs,
+    ) -> Response:
+        """Return one complete assistant response."""
 
-# === OpenAI Chat Model Implementation ===
+    @abstractmethod
+    async def stream_response(
+        self,
+        messages: List[Dict[str, str]],
+        tools: Optional[List[Dict]] = None,
+        stop: Optional[List[str]] = None,
+        callbacks: Optional[Any] = None,
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        """Yield one assistant response as text chunks."""
+
+
 class OpenAIChatModel(BaseChatModel):
-    async def generate_response(self, messages: List[Dict[str, str]],
-                                tools:Optional[List[Dict]]=None,
-                                stop:Optional[List[str]]=None,
-                                callbacks:Optional[Any]=None,
-                                **kwargs
-                                ) -> Response:
+    """Call an OpenAI-compatible chat completion endpoint."""
+
+    async def generate_response(
+        self,
+        messages: List[Dict[str, str]],
+        tools: Optional[List[Dict]] = None,
+        stop: Optional[List[str]] = None,
+        callbacks: Optional[Any] = None,
+        **kwargs,
+    ) -> Response:
+        """Fetch one non-streaming completion."""
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=self.temperature,
             stop=stop,
-            **kwargs
+            **kwargs,
         )
         return Response(
             content=response.choices[0].message.content or "",
-            token_usage=_usage_to_dict(getattr(response, "usage", None)),
-            raw_response=response
+            token_usage=normalize_token_usage(getattr(response, "usage", None)),
+            raw_response=response,
         )
-    
-    async def stream_response(self, messages: List[Dict[str, str]],
-                                tools:Optional[List[Dict]]=None,
-                                stop:Optional[List[str]]=None,
-                                callbacks:Optional[Any]=None,
-                                **kwargs
-                              ) -> AsyncIterator[str]:
+
+    async def stream_response(
+        self,
+        messages: List[Dict[str, str]],
+        tools: Optional[List[Dict]] = None,
+        stop: Optional[List[str]] = None,
+        callbacks: Optional[Any] = None,
+        **kwargs,
+    ) -> AsyncIterator[str]:
+        """Fetch one streaming completion."""
+        callback_map = callbacks if isinstance(callbacks, dict) else {}
+        on_usage = callback_map.get("on_usage")
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,
             temperature=self.temperature,
             stop=stop,
             stream=True,
-            **kwargs
+            stream_options={"include_usage": True},
+            **kwargs,
         )
         async for chunk in response:
-            delta = chunk.choices[0].delta
-            text = getattr(delta, "content", None)
+            usage = normalize_token_usage(getattr(chunk, "usage", None))
+            if usage and callable(on_usage):
+                on_usage(usage)
+            text = getattr(chunk.choices[0].delta, "content", None)
             if text:
                 yield text
-    
-    async def structured_response(self, messages: List[Dict[str, str]],
-                                  response_model: Type[BaseModel]
-                                  ) -> BaseModel:
-        response = await self.generate_response(messages)
-        return response_model.parse_raw(response.content)
-
-
-async def main():
-    chat_model = OpenAIChatModel(api_key=API_KEY, base_url=BASE_URL, model=MODEL)
-    test_message = {"role": "user", "content": "Hello, how are you?"}
-    response = await chat_model.generate_response([test_message])
-    print("Response from model:", response.content)
-    print("Token usage:", response.token_usage)
-    print("Raw response:", response.raw_response)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

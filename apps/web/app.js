@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   sessionId: "eco-rag.session-id",
   systemPrompt: "eco-rag.system-prompt",
+  modelSettings: "eco-rag.model-settings",
 };
 
 const DEFAULT_SYSTEM_PROMPT =
@@ -8,29 +9,42 @@ const DEFAULT_SYSTEM_PROMPT =
 
 const elements = {
   composer: document.querySelector("#composer"),
+  cacheHitTokens: document.querySelector("#cacheHitTokens"),
+  contentTokens: document.querySelector("#contentTokens"),
   deleteSessionButton: document.querySelector("#deleteSessionButton"),
   liveLabel: document.querySelector("#liveLabel"),
   messageInput: document.querySelector("#messageInput"),
   messages: document.querySelector("#messages"),
   modelName: document.querySelector("#modelName"),
+  applySystemPromptButton: document.querySelector("#applySystemPromptButton"),
+  apiKeyInput: document.querySelector("#apiKeyInput"),
+  baseUrlInput: document.querySelector("#baseUrlInput"),
   newSessionButton: document.querySelector("#newSessionButton"),
+  providerInput: document.querySelector("#providerInput"),
+  promptTokens: document.querySelector("#promptTokens"),
   renameSessionButton: document.querySelector("#renameSessionButton"),
+  saveModelSettingsButton: document.querySelector("#saveModelSettingsButton"),
   sendButton: document.querySelector("#sendButton"),
   sessionId: document.querySelector("#sessionId"),
   sessionList: document.querySelector("#sessionList"),
   statusText: document.querySelector("#statusText"),
   systemPrompt: document.querySelector("#systemPrompt"),
+  temperatureInput: document.querySelector("#temperatureInput"),
+  totalTokens: document.querySelector("#totalTokens"),
   activeSessionTitle: document.querySelector("#activeSessionTitle"),
+  modelInput: document.querySelector("#modelInput"),
 };
 
 const state = {
   busy: false,
+  health: null,
+  meta: null,
   messages: [],
   sessions: [],
   sessionId: localStorage.getItem(STORAGE_KEYS.sessionId),
 };
 
-elements.systemPrompt.value = localStorage.getItem(STORAGE_KEYS.systemPrompt) || DEFAULT_SYSTEM_PROMPT;
+elements.systemPrompt.value = localStorage.getItem(STORAGE_KEYS.systemPrompt) ?? DEFAULT_SYSTEM_PROMPT;
 
 boot().catch((error) => {
   setStatus(`Startup failed: ${error.message}`, true);
@@ -100,9 +114,50 @@ elements.deleteSessionButton.addEventListener("click", async () => {
   });
 });
 
-elements.systemPrompt.addEventListener("change", async () => {
-  localStorage.setItem(STORAGE_KEYS.systemPrompt, elements.systemPrompt.value);
+elements.systemPrompt.addEventListener("input", () => {
+  setStatus("System prompt changed. Click Apply Prompt to use it.");
 });
+
+elements.applySystemPromptButton.addEventListener("click", async () => {
+  const content = elements.systemPrompt.value;
+  if (!state.sessionId || state.busy) {
+    return;
+  }
+
+  await withBusy("Updating system prompt...", async () => {
+    const data = await fetchJson(`/api/sessions/${encodeURIComponent(state.sessionId)}/system-prompt`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: content.trim() || null }),
+    });
+    localStorage.setItem(STORAGE_KEYS.systemPrompt, elements.systemPrompt.value);
+    applySessionState(data);
+    await loadSessions();
+    setStatus("System prompt updated.");
+  }, async (error) => {
+    syncSystemPromptFromMessages();
+    setStatus(error.message, true, "Error");
+  });
+});
+
+elements.saveModelSettingsButton.addEventListener("click", () => {
+  persistModelSettings();
+  updateModelName();
+  setStatus("Model settings saved locally.");
+});
+
+for (const input of [
+  elements.providerInput,
+  elements.modelInput,
+  elements.baseUrlInput,
+  elements.apiKeyInput,
+  elements.temperatureInput,
+]) {
+  input.addEventListener("input", () => {
+    updateModelName();
+    setStatus("Model settings changed. Click Save to persist them.");
+  });
+}
 
 elements.sessionList.addEventListener("click", async (event) => {
   const button = event.target.closest("[data-session-id]");
@@ -137,7 +192,7 @@ elements.messages.addEventListener("click", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: updated }),
       },
-      "Message updated. Later turns were trimmed."
+      "Message updated."
     );
     return;
   }
@@ -171,19 +226,12 @@ elements.messages.addEventListener("click", async (event) => {
   }
 
   if (action === "regenerate") {
-    await withBusy("Regenerating reply...", async () => {
-      const data = await fetchJson(
-        `/api/sessions/${encodeURIComponent(state.sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate`,
-        { method: "POST" }
-      );
-      applySessionState(data);
-      await loadSessions();
-      setStatus("Message regenerated.");
-    });
+    await streamRegeneration(messageId);
   }
 });
 
 async function boot() {
+  await loadMeta();
   await loadHealth();
   await loadSessions();
 
@@ -199,8 +247,13 @@ async function boot() {
 }
 
 async function loadHealth() {
-  const data = await fetchJson("/api/health");
-  elements.modelName.textContent = data.model || "Not configured";
+  state.health = await fetchJson("/api/health");
+  updateModelName();
+}
+
+async function loadMeta() {
+  state.meta = await fetchJson("/api/meta");
+  hydrateModelSettings();
 }
 
 async function loadSessions() {
@@ -239,31 +292,77 @@ async function sendMessage() {
     return;
   }
 
-  const optimisticMessages = [
-    ...state.messages,
-    { id: "pending-user", role: "user", content: message },
-    { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true },
-  ];
-
+  const baseMessages = state.messages.slice();
   elements.messageInput.value = "";
-  renderMessages(optimisticMessages);
+  renderStreamingMessages(baseMessages, message, "");
 
   await withBusy("Thinking...", async () => {
-    const data = await fetchJson(`/api/sessions/${encodeURIComponent(state.sessionId)}/messages`, {
+    await streamSse(`/api/sessions/${encodeURIComponent(state.sessionId)}/messages/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message,
-        system_prompt: elements.systemPrompt.value.trim() || null,
+        settings: currentModelSettings(),
       }),
+    }, {
+      onChunk(payload) {
+        renderStreamingMessages(baseMessages, message, payload.content || "");
+      },
+      async onDone(payload) {
+        applySessionState(payload);
+        await loadSessions();
+        setStatus("Reply received.");
+      },
     });
-
-    applySessionState(data);
-    await loadSessions();
-    setStatus("Reply received.");
   }, async (error) => {
     renderMessages(state.messages);
     elements.messageInput.value = message;
+    setStatus(error.message, true, "Error");
+  });
+}
+
+async function streamRegeneration(messageId) {
+  const messageIndex = state.messages.findIndex((item) => item.id === messageId);
+  if (messageIndex < 0) {
+    return;
+  }
+
+  const target = state.messages[messageIndex];
+  const userIndex = target.role === "assistant"
+    ? findPreviousUserIndex(messageIndex)
+    : messageIndex;
+
+  const baseMessages = userIndex >= 0 ? state.messages.slice(0, userIndex + 1) : state.messages.slice();
+
+  await withBusy("Regenerating reply...", async () => {
+    renderMessages([
+      ...baseMessages,
+      { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true },
+    ]);
+
+    await streamSse(
+      `/api/sessions/${encodeURIComponent(state.sessionId)}/messages/${encodeURIComponent(messageId)}/regenerate/stream`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: currentModelSettings() }),
+      },
+      {
+        onChunk(payload) {
+          renderMessages([
+            ...baseMessages,
+            { id: "pending-assistant", role: "assistant", content: payload.content || "", pending: true },
+          ]);
+        },
+        async onDone(payload) {
+          applySessionState(payload);
+          await loadSessions();
+          setStatus("Message regenerated.");
+        },
+      }
+    );
+  }, async (error) => {
+    renderMessages(state.messages);
     setStatus(error.message, true, "Error");
   });
 }
@@ -335,23 +434,30 @@ function renderMessages(messages) {
       const role = escapeHtml(message.role || "assistant");
       const content = escapeHtml(message.content || "");
       const pendingClass = message.pending ? " message-pending" : "";
-      const regenerateButton =
+      const actionButtons =
         role === "system"
-          ? ""
-          : `<button class="message-action" type="button" data-action="regenerate" data-message-id="${escapeHtml(message.id)}">Regenerate</button>`;
+          ? `<button class="message-action" type="button" data-action="delete" data-message-id="${escapeHtml(message.id)}">Delete</button>`
+          : `
+              <button class="message-action" type="button" data-action="edit" data-message-id="${escapeHtml(message.id)}">Edit</button>
+              <button class="message-action" type="button" data-action="delete" data-message-id="${escapeHtml(message.id)}">Delete</button>
+              <button class="message-action" type="button" data-action="rollback" data-message-id="${escapeHtml(message.id)}">Rollback</button>
+              <button class="message-action" type="button" data-action="regenerate" data-message-id="${escapeHtml(message.id)}">Regenerate</button>
+            `;
+      const tokenUsage = formatTokenUsage(message.token_usage);
+      const tokenUsageMarkup = tokenUsage
+        ? `<div class="message-usage">${escapeHtml(tokenUsage)}</div>`
+        : "";
 
       return `
         <article class="message message-${role}${pendingClass}">
           <div class="message-topline">
             <span class="message-role">${role}</span>
             <div class="message-actions">
-              <button class="message-action" type="button" data-action="edit" data-message-id="${escapeHtml(message.id)}">Edit</button>
-              <button class="message-action" type="button" data-action="delete" data-message-id="${escapeHtml(message.id)}">Delete</button>
-              <button class="message-action" type="button" data-action="rollback" data-message-id="${escapeHtml(message.id)}">Rollback</button>
-              ${regenerateButton}
+              ${actionButtons}
             </div>
           </div>
           <div>${content}</div>
+          ${tokenUsageMarkup}
         </article>
       `;
     })
@@ -360,16 +466,36 @@ function renderMessages(messages) {
   elements.messages.scrollTop = elements.messages.scrollHeight;
 }
 
+function renderStreamingMessages(baseMessages, userMessage, assistantContent) {
+  renderMessages([
+    ...baseMessages,
+    { id: "pending-user", role: "user", content: userMessage },
+    {
+      id: "pending-assistant",
+      role: "assistant",
+      content: assistantContent || "Thinking...",
+      pending: true,
+    },
+  ]);
+}
+
 function syncSystemPromptFromMessages() {
   const systemMessage = state.messages.find((message) => message.role === "system");
-  elements.systemPrompt.value = systemMessage?.content || localStorage.getItem(STORAGE_KEYS.systemPrompt) || DEFAULT_SYSTEM_PROMPT;
+  elements.systemPrompt.value = systemMessage
+    ? systemMessage.content
+    : (localStorage.getItem(STORAGE_KEYS.systemPrompt) ?? DEFAULT_SYSTEM_PROMPT);
   localStorage.setItem(STORAGE_KEYS.systemPrompt, elements.systemPrompt.value);
 }
 
 function updateSessionMeta() {
   const session = activeSession();
+  const usage = session?.token_usage || {};
   elements.sessionId.textContent = state.sessionId || "...";
   elements.activeSessionTitle.textContent = session?.title || "New Session";
+  elements.totalTokens.textContent = formatNumber(session?.total_tokens || 0);
+  elements.promptTokens.textContent = formatNumber(usage.prompt_tokens || 0);
+  elements.contentTokens.textContent = formatNumber(usage.completion_tokens || 0);
+  elements.cacheHitTokens.textContent = formatNumber(usage.prompt_cache_hit_tokens || 0);
 }
 
 function activeSession() {
@@ -380,6 +506,48 @@ function persistSessionId() {
   if (state.sessionId) {
     localStorage.setItem(STORAGE_KEYS.sessionId, state.sessionId);
   }
+}
+
+function hydrateModelSettings() {
+  const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.modelSettings) || "null");
+  const defaults = state.meta?.default_chat_settings || {};
+  const settings = { ...defaults, ...(saved || {}) };
+
+  elements.providerInput.value = settings.provider || "openai_compatible";
+  elements.modelInput.value = settings.model || "";
+  elements.baseUrlInput.value = settings.base_url || "";
+  elements.apiKeyInput.value = settings.api_key || "";
+  elements.temperatureInput.value = String(settings.temperature ?? 1.0);
+  updateModelName();
+}
+
+function currentModelSettings() {
+  const defaults = state.meta?.default_chat_settings || {};
+  return {
+    provider: elements.providerInput.value.trim() || defaults.provider || "openai_compatible",
+    model: elements.modelInput.value.trim() || defaults.model || state.health?.model || null,
+    base_url: elements.baseUrlInput.value.trim() || defaults.base_url || null,
+    api_key: elements.apiKeyInput.value.trim() || null,
+    temperature: Number(elements.temperatureInput.value || "1"),
+  };
+}
+
+function persistModelSettings() {
+  localStorage.setItem(STORAGE_KEYS.modelSettings, JSON.stringify(currentModelSettings()));
+}
+
+function updateModelName() {
+  const settings = currentModelSettings();
+  elements.modelName.textContent = settings.model || state.health?.model || "Not configured";
+}
+
+function findPreviousUserIndex(startIndex) {
+  for (let index = startIndex - 1; index >= 0; index -= 1) {
+    if (state.messages[index]?.role === "user") {
+      return index;
+    }
+  }
+  return -1;
 }
 
 async function withBusy(label, action, onError) {
@@ -400,12 +568,19 @@ async function withBusy(label, action, onError) {
 
 function setBusy(busy, label) {
   state.busy = busy;
+  elements.applySystemPromptButton.disabled = busy;
+  elements.apiKeyInput.disabled = busy;
+  elements.baseUrlInput.disabled = busy;
   elements.sendButton.disabled = busy;
+  elements.saveModelSettingsButton.disabled = busy;
   elements.newSessionButton.disabled = busy;
+  elements.providerInput.disabled = busy;
   elements.renameSessionButton.disabled = busy;
   elements.deleteSessionButton.disabled = busy;
   elements.messageInput.disabled = busy;
+  elements.modelInput.disabled = busy;
   elements.systemPrompt.disabled = busy;
+  elements.temperatureInput.disabled = busy;
   if (label) {
     setStatus(label, false, busy ? "Working" : "Ready");
   }
@@ -426,6 +601,74 @@ async function fetchJson(url, options) {
   return data;
 }
 
+async function streamSse(url, options, handlers = {}) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || `Request failed with status ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error("Streaming is not available in this browser.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+    let boundaryIndex = buffer.indexOf("\n\n");
+    while (boundaryIndex !== -1) {
+      const rawEvent = buffer.slice(0, boundaryIndex).trim();
+      buffer = buffer.slice(boundaryIndex + 2);
+      if (rawEvent) {
+        await handleSseEvent(rawEvent, handlers);
+      }
+      boundaryIndex = buffer.indexOf("\n\n");
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  const trailing = buffer.trim();
+  if (trailing) {
+    await handleSseEvent(trailing, handlers);
+  }
+}
+
+async function handleSseEvent(rawEvent, handlers) {
+  let eventName = "message";
+  const dataLines = [];
+
+  for (const line of rawEvent.split(/\r?\n/)) {
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+
+  const payload = dataLines.length ? JSON.parse(dataLines.join("\n")) : {};
+
+  if (eventName === "chunk" && handlers.onChunk) {
+    await handlers.onChunk(payload);
+    return;
+  }
+
+  if (eventName === "done" && handlers.onDone) {
+    await handlers.onDone(payload);
+    return;
+  }
+
+  if (eventName === "error") {
+    throw new Error(payload.detail || "Streaming request failed.");
+  }
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -433,4 +676,38 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function formatTokenUsage(tokenUsage) {
+  if (!tokenUsage) {
+    return "";
+  }
+
+  const parts = [];
+  if (typeof tokenUsage.prompt_tokens === "number") {
+    parts.push(`prompt ${formatNumber(tokenUsage.prompt_tokens)}`);
+  }
+  if (typeof tokenUsage.completion_tokens === "number") {
+    parts.push(`content ${formatNumber(tokenUsage.completion_tokens)}`);
+  }
+  if (typeof tokenUsage.prompt_cache_hit_tokens === "number") {
+    parts.push(`cache hit ${formatNumber(tokenUsage.prompt_cache_hit_tokens)}`);
+  }
+  if (typeof tokenUsage.total_tokens === "number") {
+    parts.push(`total ${formatNumber(tokenUsage.total_tokens)}`);
+  }
+
+  if (parts.length) {
+    return parts.join(" | ");
+  }
+
+  const numericEntries = Object.entries(tokenUsage).filter(([, value]) => typeof value === "number");
+  if (!numericEntries.length) {
+    return "";
+  }
+  return numericEntries.map(([key, value]) => `${key} ${formatNumber(value)}`).join(" | ");
+}
+
+function formatNumber(value) {
+  return new Intl.NumberFormat().format(value);
 }

@@ -10,6 +10,4 @@ __pycache__/
 apps/web/node_modules/
 apps/desktop/src-tauri/target/
 memory/chat_sessions/*
-!memory/chat_sessions/.gitkeep
 memory/artifacts/*
-!memory/artifacts/.gitkeep
