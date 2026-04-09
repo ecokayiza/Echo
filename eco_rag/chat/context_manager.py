@@ -326,8 +326,8 @@ class Messages:
         if operation == "delete":
             if target.role == "system":
                 return self._result(self.sessions.persist(self._set_system(session, None)))
-            session["messages"] = session["messages"][:index]
-            return self._result(self.sessions.persist(session))
+            session["messages"] = [*session["messages"][:index], *session["messages"][index + 1 :]]
+            return self._result(self.sessions.persist(session), affected_message_id=message_id)
 
         if operation == "rollback":
             session["messages"] = session["messages"][: index + 1]

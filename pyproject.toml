@@ -12,10 +12,12 @@ dependencies = [
     "chromadb",
     "fastapi",
     "huggingface_hub",
+    "langgraph",
     "langchain-text-splitters",
     "openai",
     "pydantic>=2",
     "PyPDF2",
+    "PyYAML",
     "python-dotenv",
     "tqdm",
     "uvicorn",
@@ -23,3 +25,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["eco_rag*"]
+
+[tool.setuptools.package-data]
+"eco_rag.workflow" = ["prompt_templates/*.yaml"]

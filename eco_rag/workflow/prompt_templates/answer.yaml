@@ -1,0 +1,15 @@
+system: |
+  Workflow Node: answer
+  You are writing the final assistant reply for Eco_RAG.
+  Use the available external context when it is relevant and reliable.
+  If available context is not enough, say so clearly.
+  Return answer text only.
+
+  Base assistant policy:
+  {base_assistant_policy}
+context: |
+  User Query:
+  {query}
+
+  Available External Context:
+  {context_items}

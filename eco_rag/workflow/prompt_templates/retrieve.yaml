@@ -1,0 +1,14 @@
+system: |
+  Workflow Node: retrieve
+  External context or tool results are now available.
+  Decide whether the workflow should continue thinking or answer now.
+  Return strict JSON only.
+user: |
+  Allowed next_step values: think, answer
+  Return JSON with keys: next_step, reason.
+
+  User Query:
+  {query}
+
+  Available External Context:
+  {context_items}

@@ -11,9 +11,10 @@ from pydantic import BaseModel, Field
 from eco_rag.chat import ChatService
 from eco_rag.chat.registry import ChatModelSettings
 from eco_rag.config import Config
-from eco_rag.workflows.state import WorkflowStatus, WorkflowStep
+from eco_rag.workflow import WorkflowStatus, WorkflowStep
 
 WEB_DIR = Config.ROOT_DIR / "apps" / "web"
+WEB_DIST_DIR = WEB_DIR / "dist"
 DEFAULT_SYSTEM_PROMPT = (
     "You are the chat assistant for Eco_RAG. "
     "Be clear, grounded, and concise. If you are unsure, say so."
@@ -34,11 +35,6 @@ class SessionSummaryResponse(BaseModel):
 class SessionStateResponse(BaseModel):
     session: SessionSummaryResponse
     messages: list[dict[str, Any]]
-
-
-class ChatResponse(SessionStateResponse):
-    reply: str
-    token_usage: dict[str, Any] | None = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -153,36 +149,16 @@ def create_app(chat_service: ChatService | None = None):
         service.delete_session(session_id)
         return {"session_id": session_id, "deleted": True}
 
-    @app.post("/api/sessions/{session_id}/messages", response_model=ChatResponse)
-    async def send_message(session_id: str, payload: SendMessageRequest):
-        try:
-            result = await service.send_message(
-                message=payload.message,
-                session_id=session_id,
-                system_prompt=payload.system_prompt,
-                settings=payload.settings.to_settings() if payload.settings else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Chat request failed: {exc}") from exc
-        return ChatResponse(**result.to_dict())
-
     @app.post("/api/sessions/{session_id}/messages/stream")
     async def stream_message(session_id: str, payload: SendMessageRequest):
-        try:
-            stream = service.stream_message(
-                message=payload.message,
-                session_id=session_id,
-                system_prompt=payload.system_prompt,
-                settings=payload.settings.to_settings() if payload.settings else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         async def event_stream():
             try:
-                async for item in stream:
+                async for item in service.stream_message(
+                    message=payload.message,
+                    session_id=session_id,
+                    system_prompt=payload.system_prompt,
+                    settings=payload.settings.to_settings() if payload.settings else None,
+                ):
                     yield to_sse(item["event"], item["data"])
             except ValueError as exc:
                 yield to_sse("error", {"detail": str(exc)})
@@ -215,42 +191,19 @@ def create_app(chat_service: ChatService | None = None):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SessionStateResponse(**state.to_dict())
 
-    @app.post("/api/sessions/{session_id}/messages/{message_id}/regenerate", response_model=ChatResponse)
-    async def regenerate_message(
-        session_id: str,
-        message_id: str,
-        payload: RegenerateMessageRequest | None = None,
-    ):
-        try:
-            result = await service.regenerate_message(
-                session_id,
-                message_id,
-                settings=payload.settings.to_settings() if payload and payload.settings else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Chat request failed: {exc}") from exc
-        return ChatResponse(**result.to_dict())
-
     @app.post("/api/sessions/{session_id}/messages/{message_id}/regenerate/stream")
     async def stream_regenerate_message(
         session_id: str,
         message_id: str,
         payload: RegenerateMessageRequest | None = None,
     ):
-        try:
-            stream = service.stream_regenerate_message(
-                session_id,
-                message_id,
-                settings=payload.settings.to_settings() if payload and payload.settings else None,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
         async def event_stream():
             try:
-                async for item in stream:
+                async for item in service.stream_regenerate_message(
+                    session_id,
+                    message_id,
+                    settings=payload.settings.to_settings() if payload and payload.settings else None,
+                ):
                     yield to_sse(item["event"], item["data"])
             except ValueError as exc:
                 yield to_sse("error", {"detail": str(exc)})
@@ -259,8 +212,8 @@ def create_app(chat_service: ChatService | None = None):
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    if WEB_DIR.exists():
-        app.mount("/ui", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
+    if WEB_DIST_DIR.exists():
+        app.mount("/ui", StaticFiles(directory=str(WEB_DIST_DIR), html=True), name="web")
 
     return app
 

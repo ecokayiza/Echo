@@ -11,3 +11,5 @@ apps/web/node_modules/
 apps/desktop/src-tauri/target/
 memory/chat_sessions/*
 memory/artifacts/*
+apps/web/node_modules/
+apps/web/dist/

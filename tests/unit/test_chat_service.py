@@ -5,27 +5,30 @@ from eco_rag.chat import ChatService, Response
 
 class FakeModel:
     async def generate_response(self, messages, tools=None, stop=None, callbacks=None, **kwargs):
-        latest_user = next(message["content"] for message in reversed(messages) if message["role"] == "user")
-        return Response(
-            content=f"echo:{latest_user}",
-            token_usage={
-                "prompt_tokens": len(messages) * 10,
-                "completion_tokens": 4,
-                "total_tokens": len(messages) * 10 + 4,
-            },
-            raw_response=None,
-        )
+        system = messages[0]["content"]
+
+        if "Workflow Node: plan" in system:
+            return Response(
+                content='{"next_step":"think","reason":"Direct answer is enough."}',
+                token_usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                raw_response=None,
+            )
+
+        if "Workflow Node: think" in system:
+            return Response(
+                content='{"next_step":"answer","reason":"Enough context to answer now."}',
+                token_usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                raw_response=None,
+            )
+
+        raise AssertionError("Answer generation should use stream_response().")
 
     async def stream_response(self, messages, tools=None, stop=None, callbacks=None, **kwargs):
-        usage = {
-            "prompt_tokens": len(messages) * 10,
-            "completion_tokens": 4,
-            "total_tokens": len(messages) * 10 + 4,
-        }
+        latest_user = next(message["content"] for message in reversed(messages) if message["role"] == "user")
         if isinstance(callbacks, dict) and callable(callbacks.get("on_usage")):
-            callbacks["on_usage"](usage)
-        for chunk in ["echo:", next(message["content"] for message in reversed(messages) if message["role"] == "user")]:
-            yield chunk
+            callbacks["on_usage"]({"prompt_tokens": 10, "completion_tokens": 4, "total_tokens": 14})
+        yield "echo:"
+        yield latest_user
 
 
 def fake_model_factory(_settings=None):
@@ -33,60 +36,58 @@ def fake_model_factory(_settings=None):
 
 
 class ChatServiceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_send_message_creates_session_and_reply(self):
+    async def test_stream_message_creates_session_and_reply(self):
         service = ChatService(model_factory=fake_model_factory, storage={})
 
-        result = await service.send_message(
-            message="hello there",
-            session_id="test-session",
-            system_prompt="Be helpful.",
-        )
+        events = [item async for item in service.stream_message("hello there", "test-session", system_prompt="Be helpful.")]
 
-        self.assertEqual(result.reply, "echo:hello there")
-        self.assertEqual(result.session["title"], "hello there")
-        self.assertEqual([item["role"] for item in result.messages], ["system", "user", "assistant"])
-        self.assertEqual(result.messages[-1]["token_usage"]["total_tokens"], 24)
-        self.assertEqual(result.session["total_tokens"], 24)
+        self.assertEqual(events[0]["event"], "workflow")
+        self.assertIn("chunk", [item["event"] for item in events])
+        self.assertEqual(events[-1]["event"], "done")
+        self.assertEqual(events[-1]["data"]["reply"], "echo:hello there")
+        self.assertEqual(events[-1]["data"]["session"]["title"], "hello there")
+        self.assertEqual([item["role"] for item in events[-1]["data"]["messages"]], ["system", "user", "assistant"])
+        self.assertEqual(events[-1]["data"]["session"]["total_tokens"], 24)
+        self.assertEqual(events[-1]["data"]["workflow"]["status"], "completed")
 
-    async def test_update_and_regenerate_keep_context_until_regen(self):
+    async def test_update_and_stream_regenerate_keep_context_until_regen(self):
         service = ChatService(model_factory=fake_model_factory, storage={})
-        initial = await service.send_message(message="first question", session_id="session-a")
-        user_message_id = next(item["id"] for item in initial.messages if item["role"] == "user")
+        initial_events = [item async for item in service.stream_message("first question", "session-a")]
+        initial = initial_events[-1]["data"]
+        user_message_id = next(item["id"] for item in initial["messages"] if item["role"] == "user")
 
         updated = await service.update_message("session-a", user_message_id, "edited question")
         self.assertEqual([item["role"] for item in updated.messages], ["user", "assistant"])
         self.assertEqual(updated.messages[0]["content"], "edited question")
 
-        regenerated = await service.regenerate_message("session-a", user_message_id)
-        self.assertEqual(regenerated.reply, "echo:edited question")
-        self.assertEqual([item["role"] for item in regenerated.messages], ["user", "assistant"])
-        regenerated_assistant_id = next(item["id"] for item in regenerated.messages if item["role"] == "assistant")
+        regenerated_events = [item async for item in service.stream_regenerate_message("session-a", user_message_id)]
+        regenerated = regenerated_events[-1]["data"]
+        self.assertEqual(regenerated["reply"], "echo:edited question")
+        self.assertEqual([item["role"] for item in regenerated["messages"]], ["user", "assistant"])
+        regenerated_assistant_id = next(item["id"] for item in regenerated["messages"] if item["role"] == "assistant")
 
         rollback = await service.rollback_message("session-a", regenerated_assistant_id)
         self.assertEqual([item["role"] for item in rollback.messages], ["user", "assistant"])
 
+    async def test_delete_message_removes_only_the_selected_message(self):
+        service = ChatService(model_factory=fake_model_factory, storage={})
+        events = [item async for item in service.stream_message("first question", "session-delete")]
+        payload = events[-1]["data"]
+        assistant_message_id = next(item["id"] for item in payload["messages"] if item["role"] == "assistant")
+
+        deleted = await service.delete_message("session-delete", assistant_message_id)
+
+        self.assertEqual([item["role"] for item in deleted.messages], ["user"])
+
     async def test_update_system_prompt_preserves_following_messages(self):
         service = ChatService(model_factory=fake_model_factory, storage={})
-        await service.send_message(
-            message="first question",
-            session_id="session-system",
-            system_prompt="Initial prompt",
-        )
+        [item async for item in service.stream_message("first question", "session-system", system_prompt="Initial prompt")]
+        [item async for item in service.stream_message("second question", "session-system")]
 
         updated = await service.update_system_prompt("session-system", "Updated prompt")
 
-        self.assertEqual([item["role"] for item in updated.messages], ["system", "user", "assistant"])
+        self.assertEqual([item["role"] for item in updated.messages], ["system", "user", "assistant", "user", "assistant"])
         self.assertEqual(updated.messages[0]["content"], "Updated prompt")
-
-    async def test_stream_message_persists_reply_and_token_usage(self):
-        service = ChatService(model_factory=fake_model_factory, storage={})
-
-        events = [item async for item in service.stream_message("hello stream", "stream-session")]
-
-        self.assertEqual(events[0]["event"], "chunk")
-        self.assertEqual(events[-1]["event"], "done")
-        self.assertEqual(events[-1]["data"]["reply"], "echo:hello stream")
-        self.assertEqual(events[-1]["data"]["session"]["total_tokens"], 14)
 
     async def test_session_lifecycle(self):
         service = ChatService(model_factory=fake_model_factory, storage={})

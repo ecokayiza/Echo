@@ -1,151 +1,19 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Eco_RAG Chat</title>
-  <link rel="stylesheet" href="./styles.css">
-</head>
-<body>
-  <div class="backdrop backdrop-a"></div>
-  <div class="backdrop backdrop-b"></div>
-  <div class="shell">
-    <aside class="panel panel-sidebar">
-      <div class="brand-block">
-        <p class="eyebrow">Eco_RAG</p>
-        <h1>Chat Workspace</h1>
-        <p class="lede">
-          Session-aware chat with persistent memory, message controls, and a simple development-friendly UI.
-        </p>
-      </div>
-
-      <section class="sidebar-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Sessions</p>
-            <h3>Conversations</h3>
-          </div>
-          <button id="newSessionButton" class="button button-primary" type="button">New</button>
-        </div>
-
-        <div id="sessionList" class="session-list"></div>
-
-        <div class="button-row">
-          <button id="renameSessionButton" class="button button-secondary" type="button">Rename</button>
-          <button id="deleteSessionButton" class="button button-secondary button-danger" type="button">Delete</button>
-        </div>
-      </section>
-
-      <div class="meta-card">
-        <div class="meta-row">
-          <span>Model</span>
-          <strong id="modelName">Loading...</strong>
-        </div>
-        <div class="meta-row">
-          <span>Session</span>
-          <code id="sessionId">...</code>
-        </div>
-        <div class="meta-row">
-          <span>Status</span>
-          <strong id="statusText">Connecting...</strong>
-        </div>
-        <div class="meta-row">
-          <span>Prompt Tokens</span>
-          <strong id="promptTokens">0</strong>
-        </div>
-        <div class="meta-row">
-          <span>Content Tokens</span>
-          <strong id="contentTokens">0</strong>
-        </div>
-        <div class="meta-row">
-          <span>Total Tokens</span>
-          <strong id="totalTokens">0</strong>
-        </div>
-        <div class="meta-row">
-          <span>Cache Hit Tokens</span>
-          <strong id="cacheHitTokens">0</strong>
-        </div>
-      </div>
-
-      <label class="field">
-        <span>System Prompt</span>
-        <textarea id="systemPrompt" rows="6"></textarea>
-      </label>
-      <div class="button-row">
-        <button id="applySystemPromptButton" class="button button-secondary" type="button">Apply Prompt</button>
-      </div>
-
-      <section class="sidebar-section">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Model</p>
-            <h3>Settings</h3>
-          </div>
-          <button id="saveModelSettingsButton" class="button button-secondary" type="button">Save</button>
-        </div>
-
-        <label class="field">
-          <span>Provider</span>
-          <input id="providerInput" type="text" value="openai_compatible">
-        </label>
-
-        <label class="field">
-          <span>Model Name</span>
-          <input id="modelInput" type="text" placeholder="deepseek-chat">
-        </label>
-
-        <label class="field">
-          <span>Base URL</span>
-          <input id="baseUrlInput" type="text" placeholder="https://api.deepseek.com">
-        </label>
-
-        <label class="field">
-          <span>API Key</span>
-          <input id="apiKeyInput" type="password" placeholder="Optional override">
-        </label>
-
-        <label class="field">
-          <span>Temperature</span>
-          <input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="1.0">
-        </label>
-      </section>
-
-      <p class="sidebar-note">
-        Sessions are stored on disk under <code>memory/chat_sessions</code>. System prompt changes apply only when you click the button, and chat replies stream into the UI by default.
-      </p>
-    </aside>
-
-    <main class="panel panel-chat">
-      <header class="chat-header">
-        <div>
-          <p class="eyebrow">Assistant</p>
-          <h2 id="activeSessionTitle">New Session</h2>
-        </div>
-        <div class="live-pill">
-          <span class="live-dot"></span>
-          <span id="liveLabel">Ready</span>
-        </div>
-      </header>
-
-      <section id="messages" class="messages" aria-live="polite">
-        <div class="empty-state">
-          <p>Start a conversation to create the first meaningful session.</p>
-        </div>
-      </section>
-
-      <form id="composer" class="composer">
-        <label class="composer-field">
-          <span class="sr-only">Message</span>
-          <textarea id="messageInput" rows="3" placeholder="Ask anything about your docs, pipeline, or architecture..." required></textarea>
-        </label>
-        <div class="composer-actions">
-          <p class="hint">Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to send</p>
-          <button id="sendButton" class="button button-primary" type="submit">Send</button>
-        </div>
-      </form>
-    </main>
-  </div>
-
-  <script type="module" src="./app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f3eee4" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Onest:wght@400;500;600;700;800&family=Sora:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <title>Eco_RAG Workspace</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>

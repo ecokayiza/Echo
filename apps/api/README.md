@@ -1,481 +1,247 @@
-# API App
-
-This directory hosts the FastAPI backend for the Eco_RAG chat app.
-
-## Run
-
-```bash
-python -m uvicorn apps.api.app.main:app --reload
-```
-
-If Windows reports `Failed to canonicalize script path`, use:
-
-```bash
-python run_api.py
-```
-
-After startup:
-
-- UI: `http://127.0.0.1:8000/ui/`
-- OpenAPI docs: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
-
-## Overview
-
-The API is session-first.
-
-- A chat session has metadata like `session_id`, `title`, timestamps, message count, preview text, aggregated `token_usage`, and `total_tokens`.
-- Messages are stored per session and persisted on disk under `memory/chat_sessions/`.
-- Session and message usage use the same four counters: `prompt_tokens`, `prompt_cache_hit_tokens`, `completion_tokens`, and `total_tokens`.
-- The current code targets this format directly instead of carrying backward-compat branches for older layouts.
-- Message operations are handled inside the chat layer through unified in-chat actions: `send`, `edit`, `delete`, `rollback`, `regenerate`, and `system_prompt`.
-- The web UI uses streaming endpoints by default for send and regenerate.
-- Requests can optionally include per-user chat model settings such as `model`, `base_url`, `api_key`, and `temperature`.
-
-## Response Shapes
-
-These names describe API views, not three different records stored on disk.
-
-- `Session summary` is the compact metadata object used in `GET /api/sessions`.
-- `Session state` is `session summary + full messages`.
-- `Chat response` is `session state + convenience fields for the newest model turn`.
-
-The top-level `reply` and `token_usage` in a chat response are intentional. They only describe the newest assistant generation, and they are there so the frontend can use the final reply directly without diffing the full message list.
-
-### Session summary
-
-```json
-{
-  "session_id": "session-123",
-  "title": "Weather chat",
-  "created_at": "2026-04-02T09:00:00+00:00",
-  "updated_at": "2026-04-02T09:05:00+00:00",
-  "message_count": 3,
-  "preview": "It will be warm today.",
-  "token_usage": {
-    "prompt_tokens": 123,
-    "completion_tokens": 27,
-    "total_tokens": 150,
-    "prompt_cache_hit_tokens": 64
-  },
-  "total_tokens": 150
-}
-```
-
-### Session state
-
-```json
-{
-  "session": {
-    "session_id": "session-123",
-    "title": "Weather chat",
-    "created_at": "2026-04-02T09:00:00+00:00",
-    "updated_at": "2026-04-02T09:05:00+00:00",
-    "message_count": 3,
-    "preview": "It will be warm today.",
-    "token_usage": {
-      "prompt_tokens": 123,
-      "completion_tokens": 27,
-      "total_tokens": 150,
-      "prompt_cache_hit_tokens": 64
-    },
-    "total_tokens": 150
-  },
-  "messages": [
-    {
-      "id": "message-1",
-      "role": "system",
-      "content": "Be clear and concise."
-    },
-    {
-      "id": "message-2",
-      "role": "user",
-      "content": "How is the weather?"
-    },
-    {
-      "id": "message-3",
-      "role": "assistant",
-      "content": "It will be warm today.",
-      "token_usage": {
-        "prompt_tokens": 123,
-        "prompt_cache_hit_tokens": 64,
-        "completion_tokens": 27,
-        "total_tokens": 150
-      }
-    }
-  ]
-}
-```
-
-Notes:
-
-- `session.token_usage` is the session-level aggregate.
-- `messages[*].token_usage` is per-message usage.
-- Session and message usage expose the same four counters.
-
-### Chat response
-
-```json
-{
-  "session": {
-    "session_id": "session-123",
-    "title": "Weather chat",
-    "created_at": "2026-04-02T09:00:00+00:00",
-    "updated_at": "2026-04-02T09:05:00+00:00",
-    "message_count": 3,
-    "preview": "It will be warm today.",
-    "token_usage": {
-      "prompt_tokens": 123,
-      "completion_tokens": 27,
-      "total_tokens": 150,
-      "prompt_cache_hit_tokens": 64
-    },
-    "total_tokens": 150
-  },
-  "messages": [
-    {
-      "id": "message-1",
-      "role": "system",
-      "content": "Be clear and concise."
-    },
-    {
-      "id": "message-2",
-      "role": "user",
-      "content": "How is the weather?"
-    },
-    {
-      "id": "message-3",
-      "role": "assistant",
-      "content": "It will be warm today.",
-      "token_usage": {
-        "prompt_tokens": 123,
-        "completion_tokens": 27,
-        "total_tokens": 150,
-        "prompt_cache_hit_tokens": 64
-      }
-    }
-  ],
-  "reply": "It will be warm today.",
-  "token_usage": {
-    "prompt_tokens": 123,
-    "completion_tokens": 27,
-    "total_tokens": 150,
-    "prompt_cache_hit_tokens": 64
-  }
-}
-```
-
-Notes:
-
-- `reply` is the newest assistant text only.
-- Top-level `token_usage` is the newest assistant generation only.
-- The same newest assistant turn also appears in `messages`.
-- This duplication is intentional because it makes streaming and final UI updates simpler.
-
-## Endpoints
-
-### `GET /`
-
-Redirects to the lightweight frontend at `/ui/`.
-
-### `GET /api/health`
-
-Returns backend health and current configured model.
-
-Example response:
-
-```json
-{
-  "status": "ok",
-  "model": "deepseek-chat"
-}
-```
-
-### `GET /api/meta`
-
-Returns frontend metadata for workflow enums and the default system prompt.
-
-Example response:
-
-```json
-{
-  "workflow_statuses": ["queued", "running", "completed", "failed"],
-  "workflow_steps": ["query_processing", "retrieval", "generation", "finalization"],
-  "default_system_prompt": "You are the chat assistant for Eco_RAG. Be clear, grounded, and concise. If you are unsure, say so.",
-  "default_chat_settings": {
-    "provider": "openai_compatible",
-    "model": "deepseek-chat",
-    "api_key": null,
-    "base_url": "https://api.deepseek.com",
-    "temperature": 1.0
-  }
-}
-```
-
-### `GET /api/sessions`
+# API 后端说明
 
-Lists chat sessions ordered by most recently updated.
+这个目录对应 Eco_RAG 的 FastAPI 后端。
 
-Response:
+这份文档只写后端内部情况，重点说明：
 
-- `200 OK`
-- Body: `Session summary[]`
+- 模块划分
+- 主入口
+- 真实调用关系
+- workflow 的状态同步方式
+- 存储责任
+- 当前明确问题
 
-### `POST /api/sessions`
+前后端字段和接口契约请看 [apps/Contract.md](/c:/Users/22638/Desktop/design/Eco_RAG/apps/Contract.md)。
 
-Creates a new session.
+## 后端负责什么
 
-Request body:
+后端负责：
 
-```json
-{
-  "session_id": "optional-custom-id",
-  "title": "Optional title"
-}
-```
-
-Notes:
-
-- If `session_id` is omitted, the backend generates a UUID.
-- If `title` is omitted, the title starts as `New Session`.
-
-Response:
-
-- `200 OK`
-- Body: `Session summary`
-
-### `GET /api/sessions/{session_id}`
+- HTTP 与 SSE 路由
+- session 和 message 持久化
+- 模型配置解析与实例创建
+- workflow 执行
+- workflow 状态同步给前端
+- assistant 回复与 token 使用量落盘
 
-Returns session metadata plus the full message history.
+后端不负责：
 
-Response:
+- 前端状态拼装
+- 前端乐观渲染
+- 桌面壳层逻辑
 
-- `200 OK`
-- Body: `Session state`
+## 主入口
 
-### `PATCH /api/sessions/{session_id}`
+后端应用入口：
 
-Renames a session.
+- `apps/api/app/main.py`
 
-Request body:
+当前唯一主聊天入口：
 
-```json
-{
-  "title": "Renamed session"
-}
-```
+- `POST /api/sessions/{session_id}/messages/stream`
 
-Response:
+当前唯一主重生成入口：
 
-- `200 OK`
-- Body: `Session summary`
+- `POST /api/sessions/{session_id}/messages/{message_id}/regenerate/stream`
 
-Error:
+说明：
 
-- `400 Bad Request` if `title` is empty
+- 当前 Web UI 只走流式接口
+- 同步聊天接口已经移除
+- session 和 message 的管理接口仍然保留普通 HTTP 形式
 
-### `PATCH /api/sessions/{session_id}/system-prompt`
+## 后端模块划分
 
-Creates, updates, or clears the session system prompt without removing later messages.
+### Route Layer
 
-Request body:
+- `apps/api/app/main.py`
+  定义 FastAPI 路由、请求模型、SSE 包装和静态资源挂载。
 
-```json
-{
-  "content": "Be practical and direct."
-}
-```
+### Chat Layer
 
-To clear the prompt:
+- `eco_rag/chat/context_manager.py`
+  只保留 `Sessions` 与 `Messages` 两个核心类。
+- `eco_rag/chat/service.py`
+  面向 API 的聊天业务层。
+- `eco_rag/chat/registry.py`
+  根据运行时设置创建模型实例。
+- `eco_rag/chat/chat_model.py`
+  统一模型调用方式与 token usage 结构。
 
-```json
-{
-  "content": null
-}
-```
+### Workflow Layer
 
-Response:
+- `eco_rag/workflow/service.py`
+  workflow 的实际运行入口。
+- `eco_rag/workflow/tracker.py`
+  统一管理 workflow status、active node、node status、logs 和 errors。
+- `eco_rag/workflow/nodes.py`
+  node 逻辑和 LLM 路由判断。
+- `eco_rag/workflow/prompts.py`
+  加载 YAML 模板并组装提示词消息。
+- `eco_rag/workflow/prompt_templates/*.yaml`
+  每个 node 一份独立模板。
+- `eco_rag/workflow/graph.py`
+  维护 LangGraph 图定义和允许边。
+- `eco_rag/workflow/state.py`
+  workflow 运行状态与共享字段定义。
 
-- `200 OK`
-- Body: `Session state`
+### Storage Layer
 
-### `DELETE /api/sessions/{session_id}`
+- `memory/chat_sessions/*.json`
+  session 元数据、消息列表和 session 级 usage 的落盘位置。
 
-Deletes a session and its persisted history.
+## 模块之间的调用关系
 
-Response:
+一次正常的流式聊天调用关系如下：
 
-```json
-{
-  "session_id": "session-123",
-  "deleted": true
-}
-```
+1. `main.py` 接收 `POST /api/sessions/{session_id}/messages/stream`
+2. 路由调用 `ChatService.stream_message(...)`
+3. `ChatService` 通过 `Sessions` 与 `Messages` 更新 session 和记忆
+4. `ChatService` 调用 `WorkflowService.stream_chat(...)`
+5. `WorkflowService` 调用 LangGraph 运行 workflow
+6. LangGraph 按图路由执行各个 node
+7. node 通过 `prompts.py` 加载 YAML 模板
+8. node 通过 `chat/registry.py` 创建模型
+9. 模型返回结构化决策或最终回答
+10. `WorkflowTracker` 生成面向 UI 的 workflow snapshot
+11. `ChatService` 把 workflow 结果写回 session，并输出 `done`
 
-### `POST /api/sessions/{session_id}/messages`
+可以简化理解为：
 
-Sends a new user message and generates an assistant reply.
+`Route -> ChatService -> Sessions / Messages -> WorkflowService -> LangGraph -> Nodes -> Model`
 
-Request body:
+## `Sessions` 与 `Messages`
 
-```json
-{
-  "message": "Explain retrieval-augmented generation simply.",
-  "system_prompt": "Be concise and practical.",
-  "settings": {
-    "provider": "openai_compatible",
-    "model": "deepseek-chat",
-    "api_key": null,
-    "base_url": "https://api.deepseek.com",
-    "temperature": 0.7
-  }
-}
-```
+### `Sessions`
 
-Notes:
+`Sessions` 负责：
 
-- `system_prompt` is optional.
-- When provided, it is treated as an in-chat system message operation before the send.
-- `settings` is optional and overrides the default model configuration for that request.
-- If the session title is still auto-managed, the first user message becomes the title.
+- session 文件路径映射
+- session 读取与创建
+- session summary 生成
+- title 更新
+- session 级 usage 聚合
+- session 删除和持久化
 
-Response:
+### `Messages`
 
-- `200 OK`
-- Body: `Chat response`
+`Messages` 负责：
 
-Errors:
+- 消息列表读取
+- 上下文窗口构建
+- 新增 assistant / user message
+- 统一消息操作入口 `apply(...)`
 
-- `400 Bad Request` for invalid input like an empty message
-- `500 Internal Server Error` for model/provider failures
+当前消息操作包括：
 
-### `POST /api/sessions/{session_id}/messages/stream`
+- `edit`
+- `delete`
+- `rollback`
+- `system_prompt`
 
-Streams the assistant reply as `text/event-stream`.
+说明：
 
-Request body:
+- `send` 和 `regenerate` 不是单纯消息层动作，它们会进入 workflow，所以由 `ChatService` 负责
+- `Messages` 只维护消息结构和上下文，不负责 workflow 运行
 
-- Same as `POST /api/sessions/{session_id}/messages`
+## Workflow 设计
 
-Events:
+当前 workflow 节点固定为：
 
-- `chunk`: incremental assistant text
-- `done`: final `Chat response`
-- `error`: failure payload with `detail`
+- `plan`
+- `retrieve`
+- `think`
+- `answer`
 
-### `PATCH /api/sessions/{session_id}/messages/{message_id}`
+允许的路由关系：
 
-Edits a message in place.
+- `plan -> retrieve | think`
+- `retrieve -> think | answer`
+- `think -> retrieve | answer`
+- `answer -> end`
 
-Request body:
+关键点：
 
-```json
-{
-  "content": "Edited message content"
-}
-```
+- 允许边定义在 `graph.py`
+- LangGraph 现在就是唯一运行时执行路径
+- 实际走哪条边，由 node 的 LLM 输出 `next_step`
+- 后端会严格校验 `next_step`
+- 没有 fallback
+- 模型输出非法时直接报错
 
-Notes:
+## Prompt 模板
 
-- Editing a message does not remove later messages.
-- System prompt changes should go through `PATCH /api/sessions/{session_id}/system-prompt`.
+每个 node 都有独立 YAML 模板：
 
-Response:
+- `eco_rag/workflow/prompt_templates/plan.yaml`
+- `eco_rag/workflow/prompt_templates/retrieve.yaml`
+- `eco_rag/workflow/prompt_templates/think.yaml`
+- `eco_rag/workflow/prompt_templates/answer.yaml`
 
-- `200 OK`
-- Body: `Session state`
+这些模板的作用不是“重写查询”，而是：
 
-### `DELETE /api/sessions/{session_id}/messages/{message_id}`
+- 让模型确认当前 node 应该做什么
+- 判断下一步该去哪个 node
+- 在 `answer` 阶段组织最终回答
 
-Deletes a message and all following messages.
+这点很重要：
 
-Notes:
+- 当前项目不是传统“先改写 query，再检索，再回答”的固定 RAG 管线
+- `retrieve` 只是当前存在的一种外部上下文动作
+- 后续真正的扩展方向应该放在 `tools/`，让 workflow 决定是否调用工具，而不是把系统绑死在检索上
 
-- Deleting the system message clears the system prompt and keeps the remaining conversation.
-- Deleting a middle user or assistant message truncates the thread at that point.
+## 流式状态同步
 
-Response:
+前端依赖后端发送四种 SSE 事件：
 
-- `200 OK`
-- Body: `Session state`
+- `workflow`
+- `chunk`
+- `done`
+- `error`
 
-### `POST /api/sessions/{session_id}/messages/{message_id}/rollback`
+其中：
 
-Rolls the session back to a specific message.
+- `workflow` 对应一份完整 workflow snapshot
+- `chunk` 对应当前回答增量
+- `done` 对应最终、已落盘的聊天结果
+- `error` 对应终止性错误
 
-Notes:
+当前 workflow snapshot 由 `WorkflowTracker` 统一生成，包含：
 
-- The target message is kept.
-- Everything after it is removed.
+- `status`
+- `active_node`
+- `node_statuses`
+- `logs`
+- `errors`
+- `query`
+- `context_items`
+- `answer`
+- `token_usage`
 
-Response:
+这样 UI 可以同时看到：
 
-- `200 OK`
-- Body: `Session state`
+- 当前跑到哪个 node
+- 每个 node 的完成/失败/跳过情况
+- 路由日志
+- 错误信息
 
-### `POST /api/sessions/{session_id}/messages/{message_id}/regenerate`
+## 存储
 
-Regenerates the assistant reply for a message branch.
+session 文件保存在 `memory/chat_sessions/`。
 
-Notes:
+存储原则：
 
-- If the target is an assistant message, the backend finds the preceding user message and regenerates from there.
-- If the target is a user message, the backend regenerates the assistant reply directly from that point.
-- System messages cannot be regenerated.
+- 一个 session 一个文件
+- session 根级保存聚合后的 `usage`
+- assistant message 在可用时保存本条消息的 `token_usage`
+- 不保留旧格式兼容逻辑
 
-Response:
+字段命名说明：
 
-- `200 OK`
-- Body: `Chat response`
+- 磁盘文件使用 `usage`
+- API 返回使用 `token_usage`
 
-### `POST /api/sessions/{session_id}/messages/{message_id}/regenerate/stream`
+## 当前明确问题
 
-Streams the regenerated assistant reply as `text/event-stream`.
-
-Request body:
-
-```json
-{
-  "settings": {
-    "provider": "openai_compatible",
-    "model": "deepseek-chat",
-    "api_key": null,
-    "base_url": "https://api.deepseek.com",
-    "temperature": 0.7
-  }
-}
-```
-
-Events:
-
-- `chunk`: incremental assistant text
-- `done`: final `Chat response`
-- `error`: failure payload with `detail`
-
-## Message Roles
-
-Current message roles used by the API:
-
-- `system`
-- `user`
-- `assistant`
-
-## Error Format
-
-Validation and request errors are returned as standard FastAPI error payloads.
-
-Example:
-
-```json
-{
-  "detail": "Message cannot be empty."
-}
-```
-
-For chat/model failures, the API wraps the backend exception:
-
-```json
-{
-  "detail": "Chat request failed: Missing API key. Set API_KEY or OPENAI_API_KEY in your environment or .env file."
-}
-```
+- `retrieve` 当前仍然是 workflow 中唯一真正落地的外部动作。对于一个强调“行动决策”的系统来说，这还不够，后续需要引入真正的 `tools/` 设计。
+- 前端严格依赖 workflow snapshot 的字段完整性。后端一旦改字段名或漏字段，前端会直接失败。

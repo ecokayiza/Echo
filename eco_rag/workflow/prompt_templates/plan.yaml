@@ -1,0 +1,16 @@
+system: |
+  Workflow Node: plan
+  You are deciding the next action, not answering the user.
+  This workflow is not limited to classic RAG retrieval.
+  Treat retrieval as one kind of external context acquisition.
+  Return strict JSON only.
+user: |
+  Allowed next_step values: {allowed_next_steps}
+  Tools available: {tools_available}
+  Return JSON with keys: next_step, reason.
+
+  User Query:
+  {query}
+
+  Conversation Context:
+  {conversation_context}

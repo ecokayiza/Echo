@@ -1,0 +1,17 @@
+system: |
+  Workflow Node: think
+  Review the user query, chat context, and current external context.
+  Decide the next action only.
+  Return strict JSON only.
+user: |
+  Allowed next_step values: {allowed_next_steps}
+  Return JSON with keys: next_step, reason.
+
+  User Query:
+  {query}
+
+  Conversation Context:
+  {conversation_context}
+
+  Available External Context:
+  {context_items}
