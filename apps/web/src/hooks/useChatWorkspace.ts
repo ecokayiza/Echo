@@ -1,8 +1,13 @@
 import { startTransition, useEffect, useReducer, useRef, useState } from "react";
 
 import { api } from "@/lib/api";
-import { sanitizeSettings } from "@/lib/chat-settings";
 import { formatNumber, trimOrNull } from "@/lib/format";
+import {
+  createEmptyChatModel,
+  createEmptyEmbeddingModel,
+  getActiveChatModel,
+  normalizeModelSettingsDocument,
+} from "@/lib/model-settings";
 import {
   getDefaultPrompt,
   findPreviousUserIndex,
@@ -16,12 +21,14 @@ import { storage } from "@/lib/storage";
 import { setSessionIdInUrl } from "@/lib/url-state";
 import { buildFailedWorkflow, buildPendingWorkflow, normalizeWorkflow } from "@/lib/workflow";
 import type {
-  ChatSettings,
+  ChatModelConfig,
   ChatResponse,
   ConfirmDialogState,
+  EmbeddingModelConfig,
   HealthResponse,
   MessageRecord,
   MetaResponse,
+  ModelSettingsDocument,
   SessionState,
   SessionSummary,
   WorkflowSnapshot,
@@ -147,22 +154,33 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown request error.";
 }
 
+function replaceAtIndex<T>(items: T[], index: number, nextItem: T) {
+  return items.map((item, itemIndex) => (itemIndex === index ? nextItem : item));
+}
+
 export function useChatWorkspace() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [messageDraft, setMessageDraft] = useState("");
   const [systemPromptDraft, setSystemPromptDraft] = useState("");
-  const [modelSettingsDraft, setModelSettingsDraft] = useState<ChatSettings>({
-    provider: "openai_compatible",
-    model: null,
-    api_key: null,
-    base_url: null,
-    temperature: 1,
-  });
+  const [modelSettings, setModelSettings] = useState<ModelSettingsDocument>(
+    normalizeModelSettingsDocument({
+      chat_models: [],
+      embedding_models: [],
+    })
+  );
+  const [modelSettingsDraft, setModelSettingsDraft] = useState<ModelSettingsDocument>(
+    normalizeModelSettingsDocument({
+      chat_models: [],
+      embedding_models: [],
+    })
+  );
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const activeSession = state.sessions.find((session) => session.session_id === state.sessionId) ?? null;
-  const activeModelName = sanitizeSettings(modelSettingsDraft, state.meta, state.health).model ?? "Not configured";
+  const activeChatModel = getActiveChatModel(modelSettings);
+  const activeModelName = activeChatModel?.name ?? "Not configured";
   const activePrompt = getPromptFromMessages(state.messages, getDefaultPrompt(state.meta));
   const systemPromptDirty = systemPromptDraft !== activePrompt;
   const totalStoredTokens = state.sessions.reduce((sum, session) => sum + (session.total_tokens || 0), 0);
@@ -172,19 +190,15 @@ export function useChatWorkspace() {
 
     async function boot() {
       try {
-        const [health, meta] = await Promise.all([api.getHealth(), api.getMeta()]);
+        const [health, meta, modelSettings] = await Promise.all([api.getHealth(), api.getMeta(), api.getModelSettings()]);
         if (cancelled) {
           return;
         }
 
         dispatch({ type: "bootstrap", meta, health });
-
-        const nextSettings = sanitizeSettings(
-          { ...meta.default_chat_settings, ...(storage.getModelSettings() ?? {}) },
-          meta,
-          health
-        );
-        setModelSettingsDraft(nextSettings);
+        const normalizedModelSettings = normalizeModelSettingsDocument(modelSettings);
+        setModelSettings(normalizedModelSettings);
+        setModelSettingsDraft(normalizedModelSettings);
 
         const nextPrompt = storage.getSystemPrompt() ?? meta.default_system_prompt;
         setSystemPromptDraft(nextPrompt);
@@ -272,11 +286,24 @@ export function useChatWorkspace() {
   }
 
   function applySessionPayload(payload: SessionState, workflow?: WorkflowSnapshot | null) {
+    const persistedWorkflow =
+      [...payload.messages]
+        .reverse()
+        .find((message) => message.role === "assistant" && message.workflow)?.workflow ?? null;
+    const rawWorkflow = normalizeWorkflow(state.meta, workflow ?? persistedWorkflow);
+    // Keep legacy streamed responses compatible if the backend payload did not already persist workflow metadata.
+    if (rawWorkflow && payload.messages.length > 0) {
+      const lastMessage = payload.messages[payload.messages.length - 1];
+      if (lastMessage.role === "assistant" && !lastMessage.workflow) {
+        lastMessage.workflow = rawWorkflow;
+      }
+    }
+    
     startTransition(() => {
       dispatch({
         type: "session:apply",
         payload,
-        workflow: normalizeWorkflow(state.meta, workflow),
+        workflow: rawWorkflow,
       });
     });
 
@@ -309,6 +336,20 @@ export function useChatWorkspace() {
         messageInputRef.current?.focus();
       });
     }
+  }
+
+  async function refreshModelSettingsState(nextSettings: ModelSettingsDocument) {
+    const [health, meta] = await Promise.all([api.getHealth(), api.getMeta()]);
+    const normalizedModelSettings = normalizeModelSettingsDocument(nextSettings);
+    setModelSettings(normalizedModelSettings);
+    setModelSettingsDraft(normalizedModelSettings);
+    dispatch({ type: "bootstrap", meta, health });
+  }
+
+  async function persistModelSettings(nextSettings: ModelSettingsDocument) {
+    const savedSettings = await api.updateModelSettings(normalizeModelSettingsDocument(nextSettings));
+    await refreshModelSettingsState(savedSettings);
+    return savedSettings;
   }
 
   async function loadSessionSnapshot(sessionId: string) {
@@ -364,18 +405,157 @@ export function useChatWorkspace() {
     setSystemPromptDraft(activePrompt || state.meta?.default_system_prompt || "");
   }
 
-  function updateModelSetting<Key extends keyof ChatSettings>(key: Key, value: ChatSettings[Key]) {
-    setModelSettingsDraft((current) => ({
-      ...current,
-      [key]: value,
-    }));
+  function setActiveChatModel(name: string) {
+    setModelSettingsDraft((current) =>
+      normalizeModelSettingsDocument({
+        ...current,
+        active_chat_model: name,
+      })
+    );
   }
 
-  function saveModelSettings() {
-    const nextSettings = sanitizeSettings(modelSettingsDraft, state.meta, state.health);
-    setModelSettingsDraft(nextSettings);
-    storage.setModelSettings(nextSettings);
-    dispatch({ type: "status", text: "Model settings saved locally.", tone: "success", liveLabel: "Ready" });
+  function setActiveEmbeddingModel(name: string) {
+    setModelSettingsDraft((current) =>
+      normalizeModelSettingsDocument({
+        ...current,
+        active_embedding_model: name,
+      })
+    );
+  }
+
+  function updateChatModel<Key extends keyof ChatModelConfig>(index: number, key: Key, value: ChatModelConfig[Key]) {
+    setModelSettingsDraft((current) => {
+      const previous = current.chat_models[index];
+      if (!previous) {
+        return current;
+      }
+
+      const nextName = key === "name" ? (typeof value === "string" ? value : previous.name) : previous.name;
+      const nextActiveName =
+        key === "name" && current.active_chat_model === previous.name && typeof value === "string"
+          ? value
+          : current.active_chat_model;
+
+      return normalizeModelSettingsDocument({
+        ...current,
+        active_chat_model: nextActiveName,
+        chat_models: replaceAtIndex(current.chat_models, index, {
+          ...previous,
+          [key]: value,
+          ...(key === "name" ? { name: nextName } : {}),
+        }),
+      });
+    });
+  }
+
+  function updateEmbeddingModel<Key extends keyof EmbeddingModelConfig>(
+    index: number,
+    key: Key,
+    value: EmbeddingModelConfig[Key]
+  ) {
+    setModelSettingsDraft((current) => {
+      const previous = current.embedding_models[index];
+      if (!previous) {
+        return current;
+      }
+
+      const nextName = key === "name" ? (typeof value === "string" ? value : previous.name) : previous.name;
+      const nextActiveName =
+        key === "name" && current.active_embedding_model === previous.name && typeof value === "string"
+          ? value
+          : current.active_embedding_model;
+
+      return normalizeModelSettingsDocument({
+        ...current,
+        active_embedding_model: nextActiveName,
+        embedding_models: replaceAtIndex(current.embedding_models, index, {
+          ...previous,
+          [key]: value,
+          ...(key === "name" ? { name: nextName } : {}),
+        }),
+      });
+    });
+  }
+
+  function addChatModel() {
+    setModelSettingsDraft((current) =>
+      normalizeModelSettingsDocument({
+        ...current,
+        chat_models: [...current.chat_models, createEmptyChatModel(current.chat_models.length + 1)],
+      })
+    );
+  }
+
+  function addEmbeddingModel() {
+    setModelSettingsDraft((current) =>
+      normalizeModelSettingsDocument({
+        ...current,
+        embedding_models: [...current.embedding_models, createEmptyEmbeddingModel(current.embedding_models.length + 1)],
+      })
+    );
+  }
+
+  function removeChatModel(index: number) {
+    setModelSettingsDraft((current) =>
+      normalizeModelSettingsDocument({
+        ...current,
+        chat_models: current.chat_models.filter((_, itemIndex) => itemIndex !== index),
+      })
+    );
+  }
+
+  function removeEmbeddingModel(index: number) {
+    setModelSettingsDraft((current) =>
+      normalizeModelSettingsDocument({
+        ...current,
+        embedding_models: current.embedding_models.filter((_, itemIndex) => itemIndex !== index),
+      })
+    );
+  }
+
+  function openModelSettings() {
+    setModelSettingsDraft(modelSettings);
+    setModelSettingsOpen(true);
+  }
+
+  function closeModelSettings() {
+    setModelSettingsDraft(modelSettings);
+    setModelSettingsOpen(false);
+  }
+
+  async function selectActiveChatModel(name: string) {
+    if (!name || modelSettings.active_chat_model === name) {
+      return;
+    }
+
+    await withBusy(
+      "Switching active model...",
+      async () => {
+        const nextSettings = normalizeModelSettingsDocument({
+          ...modelSettings,
+          active_chat_model: name,
+        });
+        await persistModelSettings(nextSettings);
+        dispatch({ type: "status", text: "Active model updated.", tone: "success", liveLabel: "Ready" });
+      },
+      async (detail) => {
+        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
+      }
+    );
+  }
+
+  async function saveModelSettings() {
+    await withBusy(
+      "Saving model settings...",
+      async () => {
+        await persistModelSettings(modelSettingsDraft);
+        setModelSettingsOpen(false);
+        dispatch({ type: "status", text: "Model settings saved.", tone: "success", liveLabel: "Ready" });
+      },
+      async (detail) => {
+        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
+      }
+    );
   }
 
   async function renameSession(targetSession: SessionSummary, nextTitle: string) {
@@ -512,6 +692,7 @@ export function useChatWorkspace() {
 
     const stableMessages = [...state.messages];
     const pendingWorkflow = buildPendingWorkflow(state.meta, outgoing);
+    let currentWorkflow = pendingWorkflow;
 
     setMessageDraft("");
     startTransition(() => {
@@ -521,7 +702,7 @@ export function useChatWorkspace() {
         messages: [
           ...stableMessages,
           { id: "pending-user", role: "user", content: outgoing, pending: true },
-          { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true },
+          { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow },
         ],
       });
     });
@@ -536,7 +717,6 @@ export function useChatWorkspace() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               message: outgoing,
-              settings: sanitizeSettings(modelSettingsDraft, state.meta, state.health),
             }),
           },
           {
@@ -549,8 +729,17 @@ export function useChatWorkspace() {
               if (!workflow) {
                 throw new Error("Workflow event payload is empty.");
               }
+              currentWorkflow = workflow;
               startTransition(() => {
                 dispatch({ type: "workflow:set", workflow });
+                dispatch({
+                  type: "messages:set",
+                  messages: [
+                    ...stableMessages,
+                    { id: "pending-user", role: "user", content: outgoing, pending: true },
+                    { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow },
+                  ],
+                });
               });
               dispatch({
                 type: "status",
@@ -569,7 +758,7 @@ export function useChatWorkspace() {
                   messages: [
                     ...stableMessages,
                     { id: "pending-user", role: "user", content: outgoing, pending: true },
-                    { id: "pending-assistant", role: "assistant", content, pending: true },
+                    { id: "pending-assistant", role: "assistant", content, pending: true, workflow: currentWorkflow },
                   ],
                 });
               });
@@ -614,15 +803,13 @@ export function useChatWorkspace() {
       throw new Error("Cannot regenerate without a user question.");
     }
     const pendingWorkflow = buildPendingWorkflow(state.meta, question);
+    let currentWorkflow = pendingWorkflow;
 
     startTransition(() => {
       dispatch({ type: "workflow:set", workflow: pendingWorkflow });
       dispatch({
         type: "messages:set",
-        messages: [
-          ...baseMessages,
-          { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true },
-        ],
+        messages: [...baseMessages, { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow }],
       });
     });
 
@@ -634,9 +821,7 @@ export function useChatWorkspace() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              settings: sanitizeSettings(modelSettingsDraft, state.meta, state.health),
-            }),
+            body: JSON.stringify({}),
           },
           {
             onEvent: async (eventName, payload) => {
@@ -648,8 +833,13 @@ export function useChatWorkspace() {
               if (!workflow) {
                 throw new Error("Workflow event payload is empty.");
               }
+              currentWorkflow = workflow;
               startTransition(() => {
                 dispatch({ type: "workflow:set", workflow });
+                dispatch({
+                  type: "messages:set",
+                  messages: [...baseMessages, { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow }],
+                });
               });
               dispatch({
                 type: "status",
@@ -665,10 +855,7 @@ export function useChatWorkspace() {
               startTransition(() => {
                 dispatch({
                   type: "messages:set",
-                  messages: [
-                    ...baseMessages,
-                    { id: "pending-assistant", role: "assistant", content, pending: true },
-                  ],
+                  messages: [...baseMessages, { id: "pending-assistant", role: "assistant", content, pending: true, workflow: currentWorkflow }],
                 });
               });
             },
@@ -698,6 +885,7 @@ export function useChatWorkspace() {
       state,
       activeSession,
       activeModelName,
+      modelNames: modelSettings.chat_models.map((item) => item.name),
       totalStoredTokens,
       formatNumber,
     },
@@ -708,7 +896,15 @@ export function useChatWorkspace() {
       setSystemPromptDraft,
       systemPromptDirty,
       modelSettingsDraft,
-      updateModelSetting,
+      modelSettingsOpen,
+      setActiveChatModel,
+      setActiveEmbeddingModel,
+      updateChatModel,
+      updateEmbeddingModel,
+      addChatModel,
+      addEmbeddingModel,
+      removeChatModel,
+      removeEmbeddingModel,
     },
     dialogs: {
       confirmDialog,
@@ -722,6 +918,9 @@ export function useChatWorkspace() {
       createSession,
       applySystemPrompt,
       resetSystemPromptDraft,
+      openModelSettings,
+      closeModelSettings,
+      selectActiveChatModel,
       saveModelSettings,
       renameSession,
       openDeleteSessionDialog,

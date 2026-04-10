@@ -9,19 +9,12 @@ class FakeModel:
 
         if "Workflow Node: plan" in system:
             return Response(
-                content='{"next_step":"think","reason":"Direct answer is enough."}',
-                token_usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+                content='{"next_step":"answer","reason":"Direct answer is enough."}',
+                token_usage={"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                 raw_response=None,
             )
 
-        if "Workflow Node: think" in system:
-            return Response(
-                content='{"next_step":"answer","reason":"Enough context to answer now."}',
-                token_usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
-                raw_response=None,
-            )
-
-        raise AssertionError("Answer generation should use stream_response().")
+        raise AssertionError("Only the planner should run before the final answer in this test.")
 
     async def stream_response(self, messages, tools=None, stop=None, callbacks=None, **kwargs):
         latest_user = next(message["content"] for message in reversed(messages) if message["role"] == "user")
@@ -47,8 +40,9 @@ class ChatServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["data"]["reply"], "echo:hello there")
         self.assertEqual(events[-1]["data"]["session"]["title"], "hello there")
         self.assertEqual([item["role"] for item in events[-1]["data"]["messages"]], ["system", "user", "assistant"])
-        self.assertEqual(events[-1]["data"]["session"]["total_tokens"], 24)
+        self.assertEqual(events[-1]["data"]["session"]["total_tokens"], 20)
         self.assertEqual(events[-1]["data"]["workflow"]["status"], "completed")
+        self.assertEqual(events[-1]["data"]["messages"][-1]["workflow"]["answer"], "echo:hello there")
 
     async def test_update_and_stream_regenerate_keep_context_until_regen(self):
         service = ChatService(model_factory=fake_model_factory, storage={})
@@ -100,6 +94,16 @@ class ChatServiceTests(unittest.IsolatedAsyncioTestCase):
 
         service.delete_session("manual")
         self.assertEqual(service.list_sessions(), [])
+
+    async def test_workflow_metadata_is_persisted_on_assistant_messages(self):
+        service = ChatService(model_factory=fake_model_factory, storage={})
+
+        [item async for item in service.stream_message("remember workflow", "persisted")]
+        state = service.get_session_state("persisted")
+
+        self.assertEqual(state.messages[-1]["role"], "assistant")
+        self.assertEqual(state.messages[-1]["workflow"]["answer"], "echo:remember workflow")
+        self.assertEqual(state.messages[-1]["workflow"]["trace"][0]["node"], "plan")
 
 
 if __name__ == "__main__":

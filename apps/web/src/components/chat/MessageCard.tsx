@@ -6,8 +6,9 @@ import {
   PencilSquareIcon,
   TrashIcon,
   XMarkIcon,
+  SparklesIcon,
 } from "@heroicons/react/24/outline";
-import { useEffect, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { IconActionMenu } from "@/components/common/IconActionMenu";
 import { formatTokenTotal, formatTokenUsage } from "@/lib/format";
@@ -30,11 +31,27 @@ export function MessageCard({
 }: MessageCardProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
+  const [thoughtsOpen, setThoughtsOpen] = useState(!!message.pending);
+  const thoughtsContentRef = useRef<HTMLDivElement>(null);
+
   const totalTokenLabel = formatTokenTotal(message.token_usage);
   const usageLabel = formatTokenUsage(message.token_usage);
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const canCopy = isAssistant;
+
+  useEffect(() => {
+    if (message.pending) {
+      setThoughtsOpen(true);
+    }
+  }, [message.pending]);
+
+  useEffect(() => {
+    if (message.pending && thoughtsOpen && thoughtsContentRef.current) {
+      const el = thoughtsContentRef.current;
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [message.workflow?.logs, message.pending, thoughtsOpen]);
 
   useEffect(() => {
     if (!editing) {
@@ -65,25 +82,11 @@ export function MessageCard({
     setEditing(false);
   }
 
-  function onEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
-      submitEdit();
-      return;
-    }
-
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setEditing(false);
-      setDraft(message.content);
-    }
-  }
-
-  const actionButtons = editing ? (
+  const editButtons = editing ? (
     <>
       <button
         aria-label="Save message"
-        className="message-action__button"
+        className="message-action__button message-action__button--editing"
         onClick={(event) => {
           stopEvent(event);
           submitEdit();
@@ -94,7 +97,7 @@ export function MessageCard({
       </button>
       <button
         aria-label="Cancel edit"
-        className="message-action__button"
+        className="message-action__button message-action__button--editing"
         onClick={(event) => {
           stopEvent(event);
           setEditing(false);
@@ -105,7 +108,9 @@ export function MessageCard({
         <XMarkIcon />
       </button>
     </>
-  ) : (
+  ) : null;
+
+  const menuTrigger = !editing ? (
     <IconActionMenu
       items={[
         ...(canCopy
@@ -166,27 +171,87 @@ export function MessageCard({
       triggerClassName="message-action__button message-action__button--subtle"
       triggerLabel="Message actions"
     />
-  );
+  ) : null;
+
+  const visibleLogs = message.workflow?.logs?.filter(log => {
+    if (log.level === "error") return true;
+    const msg = log.message;
+    if (msg === "Workflow created.") return false;
+    if (/^[a-zA-Z_]+ started\.$/.test(msg)) return false;
+    if (/^[A-Za-z_]+ selected '[^']+'\.$/.test(msg)) return false;
+    if (msg === "Skill catalog injected for retrieve.") return false;
+    if (msg.startsWith("This route answered without")) return false;
+    return true;
+  }) || [];
 
   return (
     <article className={`message-row message-row--${message.role}${message.pending ? " message-row--pending" : ""}`}>
       <div className={`message-card message-card--${message.role}${message.pending ? " message-card--pending" : ""}`}>
-        {editing ? (
-          <div className="message-inline-editor">
-            <textarea
-              autoFocus
-              className="message-inline-editor__input"
-              onChange={(event) => {
-                setDraft(event.target.value);
-              }}
-              onKeyDown={onEditorKeyDown}
-              rows={Math.max(3, Math.min(8, draft.split("\n").length + 1))}
-              value={draft}
-            />
-          </div>
-        ) : (
-          <div className="message-card__body">{message.content}</div>
+        
+        {visibleLogs.length > 0 && (
+          <details
+            className="message-thoughts"
+            open={thoughtsOpen}
+            onToggle={(e) => setThoughtsOpen(e.currentTarget.open)}
+          >
+            <summary className="message-thoughts__summary">
+              <SparklesIcon className="message-thoughts__icon" /> Thoughts
+            </summary>
+            <div className="message-thoughts__content" ref={thoughtsContentRef}>
+              {visibleLogs.map((log, i) => (
+                <div key={i} className="message-thoughts__log" data-level={log.level}>
+                  {log.node ? <span className="message-thoughts__log-node">[{log.node}]</span> : null}
+                  <span className="message-thoughts__log-text">{log.message}</span>
+                </div>
+              ))}
+            </div>
+          </details>
         )}
+
+        <div
+          className={`message-card__body ${editing ? "message-card__body--editing" : ""}`}
+          contentEditable={editing}
+          suppressContentEditableWarning
+          onInput={(e) => {
+            setDraft(e.currentTarget.innerText || "");
+          }}
+          onKeyDown={(event) => {
+            if (!editing) return;
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              submitEdit();
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              event.currentTarget.innerText = message.content;
+              setEditing(false);
+              setDraft(message.content);
+            }
+          }}
+          ref={(el) => {
+            if (editing && el && document.activeElement !== el) {
+              el.focus();
+              try {
+                const range = document.createRange();
+                const sel = window.getSelection();
+                range.selectNodeContents(el);
+                range.collapse(false);
+                sel?.removeAllRanges();
+                sel?.addRange(range);
+              } catch (e) {}
+            }
+          }}
+          style={{ 
+            outline: "none", 
+            cursor: editing ? "text" : "inherit", 
+            whiteSpace: "pre-wrap",
+            padding: editing ? "0" : undefined,
+            margin: editing ? "0" : undefined
+          }}
+        >
+          {message.content}
+        </div>
 
         {totalTokenLabel || !message.pending ? (
           <div className="message-card__footer">
@@ -202,13 +267,17 @@ export function MessageCard({
             )}
 
             {!message.pending ? (
-              <div className={`message-actions${isUser ? " message-actions--side" : " message-actions--footer"}`}>
-                {actionButtons}
-              </div>
+              !isUser || editing ? <div className="message-actions message-actions--footer">{editButtons ?? menuTrigger}</div> : null
             ) : null}
           </div>
         ) : null}
       </div>
+
+      {!message.pending && isUser && !editing ? (
+        <div className="message-actions message-actions--outside">
+          {menuTrigger}
+        </div>
+      ) : null}
     </article>
   );
 }

@@ -194,6 +194,8 @@ class Sessions:
         usage = Sessions._usage_dict(message.token_usage)
         if usage:
             payload["token_usage"] = usage
+        if isinstance(message.workflow, dict):
+            payload["workflow"] = message.workflow
         return payload
 
     @staticmethod
@@ -257,6 +259,7 @@ class Messages:
         content: str,
         tool_calls: list[dict[str, Any]] | None = None,
         token_usage: dict[str, Any] | None = None,
+        workflow: dict[str, Any] | None = None,
     ) -> Message:
         """Append one message and persist the session."""
         session = self.sessions.get()
@@ -265,6 +268,7 @@ class Messages:
             content=self._text(content, "Message content cannot be empty."),
             tool_calls=tool_calls,
             token_usage=token_usage,
+            workflow=workflow,
         )
         session["messages"].append(message)
         self.sessions.persist(session)

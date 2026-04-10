@@ -91,7 +91,6 @@ class ChatService:
         message: str,
         session_id: str,
         system_prompt: str | None = None,
-        settings: ChatModelSettings | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream one assistant reply event by event."""
         cleaned_message = message.strip()
@@ -111,7 +110,6 @@ class ChatService:
         async for item in self._workflow().stream_chat(
             cleaned_message,
             context=messages.build_context(),
-            settings=settings,
         ):
             if item["event"] == "chunk":
                 yield item
@@ -125,7 +123,7 @@ class ChatService:
             raise ValueError("Workflow stream ended without a final state.")
 
         reply = self._reply(workflow["answer"])
-        messages.append("assistant", reply, token_usage=workflow["token_usage"])
+        messages.append("assistant", reply, token_usage=workflow["token_usage"], workflow=workflow)
         self._sync_inferred_title(sessions, messages, previous_first_user)
 
         result = ChatResult(
@@ -172,7 +170,6 @@ class ChatService:
         self,
         session_id: str,
         message_id: str,
-        settings: ChatModelSettings | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a regenerated assistant reply."""
         sessions, messages = self._chat(session_id)
@@ -183,7 +180,6 @@ class ChatService:
         async for item in self._workflow().stream_chat(
             question,
             context=messages.build_context(),
-            settings=settings,
         ):
             if item["event"] == "chunk":
                 yield item
@@ -197,7 +193,7 @@ class ChatService:
             raise ValueError("Workflow stream ended without a final state.")
 
         reply = self._reply(workflow["answer"])
-        messages.append("assistant", reply, token_usage=workflow["token_usage"])
+        messages.append("assistant", reply, token_usage=workflow["token_usage"], workflow=workflow)
         self._sync_inferred_title(sessions, messages, previous_first_user)
 
         result = ChatResult(

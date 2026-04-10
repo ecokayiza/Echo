@@ -1,70 +1,60 @@
-import { Button } from "@/components/common/Button";
+import { Cog6ToothIcon } from "@heroicons/react/24/outline";
+
 import { Field } from "@/components/common/Field";
 import { SectionCard } from "@/components/common/SectionCard";
-import type { ChatSettings } from "@/types/chat";
 
 interface ModelSettingsPanelProps {
   activeModelName: string;
   busy: boolean;
-  settings: ChatSettings;
-  onChange: <Key extends keyof ChatSettings>(key: Key, value: ChatSettings[Key]) => void;
-  onSave: () => void;
+  modelNames: string[];
+  onOpenSettings: () => void;
+  onSelectActiveModel: (name: string) => void | Promise<void>;
 }
 
 export function ModelSettingsPanel({
   activeModelName,
   busy,
-  onChange,
-  onSave,
-  settings,
+  modelNames,
+  onOpenSettings,
+  onSelectActiveModel,
 }: ModelSettingsPanelProps) {
+  const hasModels = modelNames.length > 0;
+
   return (
     <SectionCard
       eyebrow="Model"
-      title="Generation"
-      description="Model Configuration"
       actions={
-        <Button disabled={busy} onClick={onSave} size="sm" variant="primary">
-          Save
-        </Button>
+        <button
+          aria-label="Open model settings"
+          className="model-settings-button"
+          disabled={busy}
+          onClick={onOpenSettings}
+          type="button"
+        >
+          <Cog6ToothIcon />
+        </button>
       }
     >
-      <div className="model-overview">
-        <span className="model-overview__label">Active Model</span>
-        <strong className="model-overview__value">{activeModelName}</strong>
-      </div>
-
-      <div className="form-grid">
-        <Field htmlFor="temperature" label="Temperature">
-          <div className="temperature-control">
-            <input
-              disabled={busy}
-              id="temperature"
-              max="2"
-              min="0"
-              name="temperature"
-              onChange={(event) => {
-                onChange("temperature", Number.parseFloat(event.target.value || "1"));
-              }}
-              step="0.1"
-              type="range"
-              value={String(settings.temperature)}
-            />
-            <input
-              disabled={busy}
-              inputMode="decimal"
-              max="2"
-              min="0"
-              onChange={(event) => {
-                onChange("temperature", Number.parseFloat(event.target.value || "1"));
-              }}
-              step="0.1"
-              type="number"
-              value={String(settings.temperature)}
-            />
-          </div>
-        </Field>
-      </div>
+      <Field htmlFor="active-model-select" label="Active Model">
+        <select
+          disabled={busy || !hasModels}
+          id="active-model-select"
+          onChange={(event) => {
+            void onSelectActiveModel(event.target.value);
+          }}
+          value={hasModels ? activeModelName : ""}
+        >
+          {hasModels ? (
+            modelNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))
+          ) : (
+            <option value="">No models configured</option>
+          )}
+        </select>
+      </Field>
     </SectionCard>
   );
 }

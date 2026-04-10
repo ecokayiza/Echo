@@ -1,7 +1,7 @@
 import { EmptyState } from "@/components/common/EmptyState";
 import { SectionCard } from "@/components/common/SectionCard";
-import { formatNumber } from "@/lib/format";
 import type { WorkflowNodeStatus, WorkflowSnapshot } from "@/types/chat";
+import { WorkflowGraph } from "./WorkflowGraph";
 
 interface WorkflowPanelProps {
   workflow: WorkflowSnapshot | null;
@@ -11,48 +11,13 @@ export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
   return (
     <SectionCard
       eyebrow="Trace"
-      title="Workflow Trace"
     >
-      {!workflow ? (
-        <EmptyState compact description="发送一条消息后，这里会显示 workflow 运行轨迹。" title="Trace Idle" />
-      ) : (
+      <div aria-label="Workflow modern graph" style={{ padding: "20px 0" }}>
+        <WorkflowGraph nodes={workflow?.node_statuses || []} activeNode={workflow?.active_node || null} />
+      </div>
+
+      {workflow && (
         <>
-          <div className="trace-summary">
-            <div className="trace-summary__item">
-              <span>Status</span>
-              <strong>{workflow.status}</strong>
-            </div>
-            <div className="trace-summary__item">
-              <span>Active</span>
-              <strong>{workflow.active_node ?? "none"}</strong>
-            </div>
-            <div className="trace-summary__item">
-              <span>Context</span>
-              <strong>{formatNumber(workflow.context_items.length)}</strong>
-            </div>
-          </div>
-
-          <div className="trace-graph" aria-label="Workflow graph">
-            {workflow.node_statuses.map((node: WorkflowNodeStatus, index, list) => {
-              const isLast = index === list.length - 1;
-              return (
-                <div className="trace-node" key={node.node}>
-                  <div className="trace-node__rail" aria-hidden="true">
-                    <span className={`trace-node__dot trace-node__dot--${node.status}`} />
-                    {!isLast ? <span className="trace-node__line" /> : null}
-                  </div>
-                  <article className={`trace-node__card trace-node__card--${node.status}`}>
-                    <div className="trace-node__header">
-                      <strong>{node.node}</strong>
-                      <span>{node.status}</span>
-                    </div>
-                    <p className="trace-node__detail">{node.detail}</p>
-                  </article>
-                </div>
-              );
-            })}
-          </div>
-
           <div className="workflow-copy">
             <span className="workflow-copy__label">Query</span>
             <p>{workflow.query}</p>

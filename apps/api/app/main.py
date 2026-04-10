@@ -9,7 +9,17 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from eco_rag.chat import ChatService
-from eco_rag.chat.registry import ChatModelSettings
+from eco_rag.chat.registry import (
+    ChatModelSettings,
+    EmbeddingModelSettings,
+    ModelSettingsDocument,
+    get_active_chat_model_settings,
+    load_model_settings_document,
+    normalize_chat_model_settings,
+    normalize_embedding_model_settings,
+    normalize_model_settings_document,
+    save_model_settings_document,
+)
 from eco_rag.config import Config
 from eco_rag.workflow import WorkflowStatus, WorkflowStep
 
@@ -51,34 +61,69 @@ class UpdateSystemPromptRequest(BaseModel):
 
 
 class ChatModelSettingsRequest(BaseModel):
-    provider: str = "openai_compatible"
-    model: str | None = Config.MODEL
+    name: str = "Default Chat Model"
+    model: str | None = None
     api_key: str | None = None
-    base_url: str | None = Config.BASE_URL
+    base_url: str | None = None
     temperature: float = 1.0
+    top_p: float | None = None
+    enable_thinking: bool | None = None
 
     def to_settings(self) -> ChatModelSettings:
-        return ChatModelSettings(
-            provider=self.provider,
-            model=self.model,
-            api_key=self.api_key or Config.API_KEY,
-            base_url=self.base_url,
-            temperature=self.temperature,
+        return normalize_chat_model_settings(self.model_dump())
+
+    @classmethod
+    def from_settings(cls, settings: ChatModelSettings):
+        return cls(**settings.__dict__)
+
+
+class EmbeddingModelSettingsRequest(BaseModel):
+    name: str = "Default Embedding Model"
+    model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+
+    def to_settings(self) -> EmbeddingModelSettings:
+        return normalize_embedding_model_settings(self.model_dump())
+
+    @classmethod
+    def from_settings(cls, settings: EmbeddingModelSettings):
+        return cls(**settings.__dict__)
+
+
+class ModelSettingsDocumentRequest(BaseModel):
+    active_chat_model: str | None = None
+    active_embedding_model: str | None = None
+    chat_models: list[ChatModelSettingsRequest] = Field(default_factory=list)
+    embedding_models: list[EmbeddingModelSettingsRequest] = Field(default_factory=list)
+
+    def to_document(self) -> ModelSettingsDocument:
+        return normalize_model_settings_document(
+            {
+                "active_chat_model": self.active_chat_model,
+                "active_embedding_model": self.active_embedding_model,
+                "chat_models": [item.model_dump() for item in self.chat_models],
+                "embedding_models": [item.model_dump() for item in self.embedding_models],
+            }
+        )
+
+    @classmethod
+    def from_document(cls, document: ModelSettingsDocument):
+        return cls(
+            active_chat_model=document.active_chat_model,
+            active_embedding_model=document.active_embedding_model,
+            chat_models=[ChatModelSettingsRequest.from_settings(item) for item in document.chat_models],
+            embedding_models=[EmbeddingModelSettingsRequest.from_settings(item) for item in document.embedding_models],
         )
 
 
 class SendMessageRequest(BaseModel):
     message: str = Field(min_length=1)
     system_prompt: str | None = None
-    settings: ChatModelSettingsRequest | None = None
 
 
 class UpdateMessageRequest(BaseModel):
     content: str = Field(min_length=1)
-
-
-class RegenerateMessageRequest(BaseModel):
-    settings: ChatModelSettingsRequest | None = None
 
 
 def to_sse(event: str, payload: dict[str, Any]) -> str:
@@ -99,7 +144,8 @@ def create_app(chat_service: ChatService | None = None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "model": Config.MODEL}
+        active_chat_model = get_active_chat_model_settings(required=False)
+        return {"status": "ok", "model": active_chat_model.model if active_chat_model else None}
 
     @app.get("/api/meta")
     def meta():
@@ -107,8 +153,15 @@ def create_app(chat_service: ChatService | None = None):
             "workflow_statuses": [status.value for status in WorkflowStatus],
             "workflow_steps": [step.value for step in WorkflowStep],
             "default_system_prompt": DEFAULT_SYSTEM_PROMPT,
-            "default_chat_settings": ChatModelSettingsRequest().model_dump(),
         }
+
+    @app.get("/api/model-settings", response_model=ModelSettingsDocumentRequest)
+    def get_model_settings():
+        return ModelSettingsDocumentRequest.from_document(load_model_settings_document())
+
+    @app.put("/api/model-settings", response_model=ModelSettingsDocumentRequest)
+    def update_model_settings(payload: ModelSettingsDocumentRequest):
+        return ModelSettingsDocumentRequest.from_document(save_model_settings_document(payload.to_document()))
 
     @app.get("/api/sessions", response_model=list[SessionSummaryResponse])
     def list_sessions():
@@ -157,7 +210,6 @@ def create_app(chat_service: ChatService | None = None):
                     message=payload.message,
                     session_id=session_id,
                     system_prompt=payload.system_prompt,
-                    settings=payload.settings.to_settings() if payload.settings else None,
                 ):
                     yield to_sse(item["event"], item["data"])
             except ValueError as exc:
@@ -195,14 +247,12 @@ def create_app(chat_service: ChatService | None = None):
     async def stream_regenerate_message(
         session_id: str,
         message_id: str,
-        payload: RegenerateMessageRequest | None = None,
     ):
         async def event_stream():
             try:
                 async for item in service.stream_regenerate_message(
                     session_id,
                     message_id,
-                    settings=payload.settings.to_settings() if payload and payload.settings else None,
                 ):
                     yield to_sse(item["event"], item["data"])
             except ValueError as exc:

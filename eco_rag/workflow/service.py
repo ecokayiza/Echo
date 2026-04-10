@@ -4,6 +4,8 @@ from typing import AsyncIterator
 from typing import Any, Callable
 
 from ..chat.registry import ChatModelSettings, build_chat_model
+from ..skills import load_skill_catalog
+from ..tools import build_retrieve_tools
 from .graph import build_workflow
 from .nodes import (
     DEFAULT_WORKFLOW_PROMPT,
@@ -31,10 +33,9 @@ class WorkflowService:
     async def stream(
         self,
         question: str,
-        settings: ChatModelSettings | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream workflow events for one standalone question."""
-        async for item in self._stream_state(new_state(self._query(question)), settings):
+        async for item in self._stream_state(new_state(self._query(question))):
             yield item
 
     async def stream_chat(
@@ -42,18 +43,17 @@ class WorkflowService:
         question: str,
         *,
         context: list[dict[str, Any]] | None = None,
-        settings: ChatModelSettings | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream workflow events for one chat turn."""
-        async for item in self._stream_state(new_state(self._query(question), context), settings):
+        async for item in self._stream_state(new_state(self._query(question), context)):
             yield item
 
-    def _deps(self, settings: ChatModelSettings | None) -> WorkflowDependencies:
+    def _deps(self) -> WorkflowDependencies:
         """Build one dependency bundle for a workflow run."""
         return WorkflowDependencies(
-            model_factory=self.model_factory,
-            settings=settings,
-            tool_runner=self.tool_runner,
+            model=self.model_factory(),
+            retrieve_tools=tuple(build_retrieve_tools(self.tool_runner)),
+            skills_prompt=load_skill_catalog(),
             system_prompt=self.system_prompt,
         )
 
@@ -68,10 +68,9 @@ class WorkflowService:
     async def _stream_state(
         self,
         state: WorkflowState,
-        settings: ChatModelSettings | None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Run the LangGraph workflow and adapt its events to the app stream contract."""
-        deps = self._deps(settings)
+        deps = self._deps()
         graph = build_workflow(deps)
         tracker = WorkflowTracker(state["query"])
         tracker.log("Workflow created.")
@@ -132,6 +131,8 @@ class WorkflowService:
         next_step = state.get("next_step")
         if step == WorkflowStep.PLAN and next_step:
             tracker.log(f"Planner selected '{next_step}'.", node=step.value)
+        elif step == WorkflowStep.INJECT_SKILLS:
+            tracker.log("Skill catalog injected for retrieve.", node=step.value)
         elif step == WorkflowStep.RETRIEVE and next_step:
             tracker.log(f"Retrieve selected '{next_step}'.", node=step.value)
         elif step == WorkflowStep.THINK and next_step:
@@ -140,11 +141,22 @@ class WorkflowService:
     @staticmethod
     def _start_step(tracker: WorkflowTracker, step: WorkflowStep):
         """Mark one workflow step as running with the UI-facing detail text."""
-        if step == WorkflowStep.ANSWER and tracker._get(WorkflowStep.RETRIEVE.value)["status"] == "queued":
-            tracker.skip(WorkflowStep.RETRIEVE, "This route answered without external retrieval.")
+        if step == WorkflowStep.ANSWER:
+            if tracker._get(WorkflowStep.INJECT_SKILLS.value)["status"] == "queued":
+                tracker.skip(WorkflowStep.INJECT_SKILLS, "This route answered without loading the skill catalog.")
+            if tracker._get(WorkflowStep.RETRIEVE.value)["status"] == "queued":
+                tracker.skip(WorkflowStep.RETRIEVE, "This route answered without external retrieval.")
+            if tracker._get(WorkflowStep.THINK.value)["status"] == "queued":
+                tracker.skip(WorkflowStep.THINK, "This route answered without an extra reflection step.")
         detail = None
         if step == WorkflowStep.PLAN:
             detail = "Preparing workflow."
+        elif step == WorkflowStep.INJECT_SKILLS:
+            detail = "Injecting skill catalog."
+        elif step == WorkflowStep.RETRIEVE:
+            detail = "Selecting tools and gathering context."
+        elif step == WorkflowStep.THINK:
+            detail = "Reflecting on the current evidence."
         elif step == WorkflowStep.ANSWER:
             detail = "Streaming final answer."
         tracker.start(step, detail)

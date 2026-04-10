@@ -1,98 +1,145 @@
-# Web 前端说明
+# Eco_RAG Web UI
 
-这个目录是 Eco_RAG 的 React 前端。
+这个目录是 Eco_RAG 的 React 前端。它不是自己推理 workflow，而是消费后端持续推送的 workflow snapshot，并把聊天、历史会话和流程过程一起呈现出来。
 
-当前技术栈：
+## 技术栈
 
 - React 19
 - TypeScript
 - Vite
+- 原生 CSS
+- REST + SSE
 
-## 前端负责什么
+## 前端职责
 
-前端负责：
-
-- session 列表和切换
-- 聊天消息展示
-- system prompt 编辑
-- 模型设置编辑
-- 发送 / 重生成消息
-- workflow 调试面板
-- 流式回答渲染
+- 渲染聊天工作台
+- 管理 session 列表与选中状态
+- 发送消息、重生成、编辑、删除、回滚
+- 实时展示 workflow 节点状态、日志和过程 trace
+- 展示已持久化的 assistant message workflow 数据
+- 管理模型设置界面
 
 前端不负责：
 
-- workflow 路由判断
-- session 持久化
-- token 聚合计算
-- 工具调用决策
+- workflow 路由决策
+- tool / skill 选择
+- token usage 计算
+- session 底层持久化
 
-这些都由后端负责。
+## 关键目录
 
-## 主交互路径
+聊天组件：
 
-前端的主发送路径只有一条：
+- `src/components/chat/`
 
-- `POST /api/sessions/{session_id}/messages/stream`
+功能面板：
 
-主重生成路径：
+- `src/components/panels/`
+  - `WorkflowPanel.tsx`
+  - `WorkflowGraph.tsx`
+  - `ModelSettingsPanel.tsx`
 
-- `POST /api/sessions/{session_id}/messages/{message_id}/regenerate/stream`
+共享组件：
 
-前端会消费以下 SSE 事件：
+- `src/components/common/`
 
-- `workflow`
-- `chunk`
-- `done`
-- `error`
+状态与副作用：
 
-## 本地开发
+- `src/hooks/useChatWorkspace.ts`
+
+数据适配与网络：
+
+- `src/lib/api.ts`
+- `src/lib/sse.ts`
+- `src/lib/workflow.ts`
+- `src/lib/storage.ts`
+
+类型：
+
+- `src/types/chat.ts`
+
+## 主交互流
+
+发送消息时：
+
+1. `MessageComposer` 触发发送
+2. `useChatWorkspace` 调用流式接口
+3. `readEventStream(...)` 消费 SSE
+4. `workflow` 事件更新工作流面板
+5. `chunk` 事件更新 pending assistant message
+6. `done` 事件用后端返回的已持久化 session 覆盖本地状态
+
+## 当前依赖的 workflow 语义
+
+前端默认后端 workflow 节点顺序是：
+
+- `plan`
+- `inject_skills`
+- `retrieve`
+- `think`
+- `answer`
+
+当前 snapshot 里最重要的字段包括：
+
+- `status`
+- `active_node`
+- `node_statuses`
+- `logs`
+- `errors`
+- `context_items`
+- `loaded_skills`
+- `trace`
+- `answer`
+
+其中：
+
+- `trace` 保存本轮 `plan / retrieve / think / answer` 的模型输出
+- `loaded_skills` 保存本轮按需载入的 skill
+- 这些数据会挂在 assistant message 的 `workflow` 字段上
+
+因此刷新或重新打开 session 时，前端可以从消息历史中恢复 workflow 过程，而不需要重新跑一遍模型。
+
+## 会话恢复语义
+
+前端现在同时处理两种 workflow 来源：
+
+1. SSE 过程中的临时 workflow
+2. session 历史中 assistant message 已持久化的 `workflow`
+
+`useChatWorkspace` 优先相信后端已经持久化的 message workflow；只有在兼容旧数据时，才会把流式 `workflow` 补到最后一条 assistant message 上。
+
+## 开发
+
+安装依赖：
 
 ```bash
-cd apps/web
 npm install
+```
+
+本地开发：
+
+```bash
 npm run dev
 ```
 
-开发地址：
-
-- `http://127.0.0.1:5173/ui/`
-
-说明：
-
-- Vite 配置了 `base: /ui/`
-- 这样开发路径和 FastAPI 挂载路径保持一致
-
-## 生产构建
+生产构建：
 
 ```bash
-cd apps/web
 npm run build
 ```
 
-构建产物输出到：
+## 依赖的后端能力
 
-- `apps/web/dist/`
+前端依赖：
 
-后端会把该目录挂载到：
+- `GET /api/meta`
+- `GET /api/health`
+- `GET /api/model-settings`
+- `PUT /api/model-settings`
+- session CRUD
+- `POST /api/sessions/{session_id}/messages/stream`
+- `POST /api/sessions/{session_id}/messages/{message_id}/regenerate/stream`
 
-- `/ui/`
+完整契约请看：
 
-## 接口依赖
-
-完整接口和字段定义请看：
-
-- [apps/Contract.md](/c:/Users/22638/Desktop/design/Eco_RAG/apps/Contract.md)
-
-前端依赖的是流式接口，不依赖同步聊天接口。
-
-## 当前前端约束
-
-- workflow snapshot 会被严格校验
-- 后端少字段、字段名变化、节点名变化，前端都会直接出错
-- `pending` 是纯前端临时状态，不属于后端协议
-
-## 当前问题
-
-- workflow 面板现在已经能看状态、节点、日志和错误，但它仍然是开发期调试视图，信息密度高于普通产品界面。
-- 当前 UI 已经不再把系统理解成“文档检索问答”，但部分视觉语言仍然偏开发工具风格，后续可以继续收敛。
+- [apps/Contract.md](../Contract.md)

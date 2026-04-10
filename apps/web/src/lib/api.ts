@@ -1,6 +1,7 @@
 import type {
   HealthResponse,
   MetaResponse,
+  ModelSettingsDocument,
   SessionState,
   SessionSummary,
 } from "@/types/chat";
@@ -22,6 +23,16 @@ export const api = {
   },
   getMeta() {
     return requestJson<MetaResponse>("/api/meta");
+  },
+  getModelSettings() {
+    return requestJson<ModelSettingsDocument>("/api/model-settings");
+  },
+  updateModelSettings(settings: ModelSettingsDocument) {
+    return requestJson<ModelSettingsDocument>("/api/model-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
   },
   listSessions() {
     return requestJson<SessionSummary[]>("/api/sessions");

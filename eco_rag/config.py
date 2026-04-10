@@ -1,48 +1,11 @@
-import os
 from pathlib import Path
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:  # pragma: no cover - optional local dependency during bootstrap
-    def load_dotenv(*args, **kwargs):
-        return False
-
 ROOT_DIR = Path(__file__).resolve().parent.parent
-ENV_PATH = ROOT_DIR / ".env"
-
-def _load_simple_dotenv(path: Path):
-    if not path.exists():
-        return
-
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-
-        if not key:
-            continue
-
-        if value and value[0] == value[-1] and value[0] in {'"', "'"}:
-            value = value[1:-1]
-
-        os.environ.setdefault(key, value)
-
-
-if not load_dotenv(ENV_PATH):
-    _load_simple_dotenv(ENV_PATH)
 
 
 class Config:
-    API_KEY = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
-    BASE_URL = os.getenv("BASE_URL") or os.getenv("OPENAI_BASE_URL")
-    MODEL = os.getenv("MODEL") or os.getenv("OPENAI_MODEL")
-    HF_TOKEN = os.getenv("HF_TOKEN")
-
     ROOT_DIR = ROOT_DIR
+    MODELS_PATH = ROOT_DIR / "models.json"
     DATA_DIR = ROOT_DIR / "data"
     DB_PATH = ROOT_DIR / "db"
     MEMORY_DIR = ROOT_DIR / "memory"
@@ -52,7 +15,7 @@ class Config:
 
     CHUNK_SIZE = 1000
     CHUNK_OVERLAP = 200
-    EMBEDDING_MODEL = "BAAI/bge-m3"
+    DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
 
     @staticmethod
     def get_relative_path(file_path, data_dir=DATA_DIR):
@@ -66,4 +29,4 @@ class Config:
 
 if __name__ == "__main__":
     print(f"ROOT_DIR: {Config.ROOT_DIR}")
-    print(f"model: {Config.MODEL}")
+    print(f"models path: {Config.MODELS_PATH}")

@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from uuid import uuid4
 
@@ -5,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
 from eco_rag.chat.service import SessionState
+from eco_rag.config import Config
 
 
 def workflow_payload(query: str, *, status: str, active_node: str | None, answer: str = ""):
@@ -17,6 +20,11 @@ def workflow_payload(query: str, *, status: str, active_node: str | None, answer
         "active_node": active_node,
         "node_statuses": [
             {"node": "plan", "status": "completed", "detail": "Planner decided the route."},
+            {
+                "node": "inject_skills",
+                "status": "skipped" if status == "completed" else "queued",
+                "detail": "Not needed in this route." if status == "completed" else None,
+            },
             {"node": "retrieve", "status": "skipped" if status == "completed" else "queued", "detail": "Not needed in this route." if status == "completed" else None},
             {"node": "think", "status": "running" if active_node == "think" else ("completed" if status == "completed" else "queued"), "detail": "Thinking." if active_node == "think" else ("Context is enough." if status == "completed" else None)},
             {"node": "answer", "status": "completed" if status == "completed" else "queued", "detail": "Generated final answer." if status == "completed" else None},
@@ -193,7 +201,44 @@ class FakeChatService:
 
 class ApiChatTests(unittest.TestCase):
     def setUp(self):
+        self._temp_dir = tempfile.TemporaryDirectory()
+        self._previous_models_path = Config.MODELS_PATH
+        Config.MODELS_PATH = type(Config.MODELS_PATH)(self._temp_dir.name) / "models.json"
+        Config.MODELS_PATH.write_text(
+            json.dumps(
+                {
+                    "active_chat_model": "Test Chat",
+                    "active_embedding_model": "Test Embedding",
+                    "chat_models": [
+                        {
+                            "name": "Test Chat",
+                            "model": "test-model",
+                            "api_key": "test-key",
+                            "base_url": "https://example.test",
+                            "temperature": 0.8,
+                            "top_p": 0.9,
+                            "enable_thinking": False,
+                        }
+                    ],
+                    "embedding_models": [
+                        {
+                            "name": "Test Embedding",
+                            "model": "test-embedding-model",
+                            "api_key": "embedding-key",
+                            "base_url": "https://embedding.example.test",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         self.client = TestClient(create_app(chat_service=FakeChatService()))
+
+    def tearDown(self):
+        Config.MODELS_PATH = self._previous_models_path
+        self._temp_dir.cleanup()
 
     def test_session_lifecycle(self):
         created = self.client.post("/api/sessions", json={"session_id": "s1", "title": "Session One"})
@@ -252,6 +297,47 @@ class ApiChatTests(unittest.TestCase):
         regenerate = self.client.post("/api/sessions/sync/messages/user-1/regenerate", json={})
         self.assertEqual(send.status_code, 404)
         self.assertEqual(regenerate.status_code, 404)
+
+    def test_model_settings_endpoints_read_and_write_models_json(self):
+        current = self.client.get("/api/model-settings")
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.json()["active_chat_model"], "Test Chat")
+        self.assertEqual(current.json()["chat_models"][0]["model"], "test-model")
+
+        updated = self.client.put(
+            "/api/model-settings",
+            json={
+                "active_chat_model": "Updated Chat",
+                "active_embedding_model": "Updated Embedding",
+                "chat_models": [
+                    {
+                        "name": "Updated Chat",
+                        "model": "updated-model",
+                        "api_key": "updated-key",
+                        "base_url": "https://updated.example",
+                        "temperature": 1.1,
+                        "top_p": 0.95,
+                        "enable_thinking": True,
+                    }
+                ],
+                "embedding_models": [
+                    {
+                        "name": "Updated Embedding",
+                        "model": "updated-embedding-model",
+                        "api_key": "updated-embedding-key",
+                        "base_url": "https://updated.embedding.example",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["active_chat_model"], "Updated Chat")
+        self.assertEqual(updated.json()["chat_models"][0]["model"], "updated-model")
+
+        persisted = json.loads(Config.MODELS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["chat_models"][0]["model"], "updated-model")
+        self.assertEqual(persisted["chat_models"][0]["api_key"], "updated-key")
+        self.assertEqual(persisted["embedding_models"][0]["model"], "updated-embedding-model")
 
 
 if __name__ == "__main__":

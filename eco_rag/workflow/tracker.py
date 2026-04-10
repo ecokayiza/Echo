@@ -71,7 +71,10 @@ class WorkflowTracker:
         """Build the UI-facing workflow snapshot."""
         return {
             "query": state["query"],
+            "requested_skill": state.get("requested_skill"),
+            "loaded_skills": list(state.get("loaded_skills", [])),
             "context_items": list(state["context_items"]),
+            "trace": list(state.get("trace", [])),
             "answer": state["answer"],
             "token_usage": state["token_usage"],
             "status": self.status,

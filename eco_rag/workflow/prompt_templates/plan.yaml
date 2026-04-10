@@ -1,12 +1,13 @@
 system: |
   Workflow Node: plan
-  You are deciding the next action, not answering the user.
-  This workflow is not limited to classic RAG retrieval.
-  Treat retrieval as one kind of external context acquisition.
+  Decide whether this turn can go straight to the final answer or must enter retrieval.
+  You are routing the workflow, not answering the user.
+  If a requested skill is present, you must choose retrieve.
   Return strict JSON only.
 user: |
   Allowed next_step values: {allowed_next_steps}
   Tools available: {tools_available}
+  Requested skill: {requested_skill}
   Return JSON with keys: next_step, reason.
 
   User Query:

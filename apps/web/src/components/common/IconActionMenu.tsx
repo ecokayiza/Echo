@@ -64,17 +64,15 @@ export function IconActionMenu({
     }
 
     const rect = trigger.getBoundingClientRect();
-    const menuWidth = Math.max(88, items.length * 40 + 12);
-    const menuHeight = 46;
-    const gutter = 8;
+    const menuWidth = Math.max(112, items.length * 52 + 16);
+    const menuHeight = 58;
+    const gutter = 4;
     const openDown = window.innerHeight - rect.bottom >= menuHeight || window.innerHeight - rect.bottom > rect.top;
+    const centeredLeft = rect.left - menuWidth / 2;
 
     setPosition({
-      top: Math.max(gutter, openDown ? rect.bottom + 6 : rect.top - menuHeight - 6),
-      left: Math.min(
-        Math.max(rect.right - menuWidth, gutter),
-        window.innerWidth - menuWidth - gutter
-      ),
+      top: Math.max(gutter, openDown ? rect.bottom : rect.top - menuHeight),
+      left: Math.min(Math.max(centeredLeft, gutter), window.innerWidth - menuWidth - gutter),
     });
     setOpen(true);
   }
@@ -85,7 +83,7 @@ export function IconActionMenu({
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label={triggerLabel}
-        className={triggerClassName}
+        className={`icon-menu__trigger ${triggerClassName}`.trim()}
         disabled={disabled}
         onClick={(event) => {
           event.preventDefault();

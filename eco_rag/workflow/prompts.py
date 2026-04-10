@@ -9,9 +9,14 @@ import yaml
 PROMPT_DIR = Path(__file__).with_name("prompt_templates")
 
 
-def plan_messages(query: str, context: list[dict[str, Any]], tools_enabled: bool) -> list[dict[str, str]]:
-    """Build the plan node messages from YAML templates."""
-    allowed = ["retrieve", "think"] if tools_enabled else ["think"]
+def plan_messages(
+    query: str,
+    context: list[dict[str, Any]],
+    retrieval_enabled: bool,
+    requested_skill: str | None,
+) -> list[dict[str, str]]:
+    """Build the planner prompt."""
+    allowed = ["answer", "retrieve"] if retrieval_enabled else ["answer"]
     template = _template("plan")
     return [
         {"role": "system", "content": template["system"].strip()},
@@ -19,7 +24,8 @@ def plan_messages(query: str, context: list[dict[str, Any]], tools_enabled: bool
             "role": "user",
             "content": template["user"].format(
                 allowed_next_steps=", ".join(allowed),
-                tools_available="yes" if tools_enabled else "no",
+                tools_available="yes" if retrieval_enabled else "no",
+                requested_skill=requested_skill or "(none)",
                 query=query,
                 conversation_context=_conversation(context),
             ).strip(),
@@ -27,8 +33,17 @@ def plan_messages(query: str, context: list[dict[str, Any]], tools_enabled: bool
     ]
 
 
-def retrieve_messages(query: str, context_items: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Build the retrieve node messages from YAML templates."""
+def retrieve_messages(
+    query: str,
+    context: list[dict[str, Any]],
+    context_items: list[dict[str, Any]],
+    skills_prompt: str,
+    loaded_skills: list[dict[str, Any]],
+    available_tools: list[str],
+    requested_skill: str | None,
+    can_load_skill: bool,
+) -> list[dict[str, str]]:
+    """Build the retrieve prompt."""
     template = _template("retrieve")
     return [
         {"role": "system", "content": template["system"].strip()},
@@ -36,6 +51,12 @@ def retrieve_messages(query: str, context_items: list[dict[str, Any]]) -> list[d
             "role": "user",
             "content": template["user"].format(
                 query=query,
+                conversation_context=_conversation(context),
+                available_tools=", ".join(available_tools) or "(none)",
+                requested_skill=requested_skill or "(none)",
+                can_load_skill="yes" if can_load_skill else "no",
+                skills_prompt=skills_prompt or "(skills catalog unavailable)",
+                loaded_skills=_loaded_skills(loaded_skills),
                 context_items=_context_items(context_items),
             ).strip(),
         },
@@ -48,7 +69,7 @@ def think_messages(
     context_items: list[dict[str, Any]],
     allow_retrieve: bool,
 ) -> list[dict[str, str]]:
-    """Build the think node messages from YAML templates."""
+    """Build the reflection prompt."""
     allowed = ["retrieve", "answer"] if allow_retrieve else ["answer"]
     template = _template("think")
     return [
@@ -57,6 +78,7 @@ def think_messages(
             "role": "user",
             "content": template["user"].format(
                 allowed_next_steps=", ".join(allowed),
+                allow_retrieve="yes" if allow_retrieve else "no",
                 query=query,
                 conversation_context=_conversation(context),
                 context_items=_context_items(context_items),
@@ -71,7 +93,7 @@ def answer_messages(
     context_items: list[dict[str, Any]],
     system_prompt: str,
 ) -> list[dict[str, str]]:
-    """Build the answer node messages from YAML templates."""
+    """Build the answer prompt."""
     template = _template("answer")
     base = [dict(message) for message in context]
     insert_at = next((index for index, item in enumerate(base) if item.get("role") != "system"), len(base))
@@ -106,18 +128,18 @@ def _template(name: str) -> dict[str, str]:
 
 
 def _conversation(messages: list[dict[str, Any]]) -> str:
-    """Format chat context for node prompts."""
+    """Format chat context for prompt injection."""
     parts = []
     for item in messages:
         role = str(item.get("role", "user")).strip() or "user"
         content = str(item.get("content", "")).strip()
         if content:
             parts.append(f"{role}: {content}")
-    return "\n".join(parts)
+    return "\n".join(parts) or "(none)"
 
 
 def _context_items(items: list[dict[str, Any]]) -> str:
-    """Format external context items for node prompts."""
+    """Format external context items for prompt injection."""
     parts = []
     for index, item in enumerate(items, start=1):
         title = str(item.get("title", "")).strip()
@@ -128,4 +150,16 @@ def _context_items(items: list[dict[str, Any]]) -> str:
         if title:
             prefix = f"{prefix} {title}"
         parts.append(f"{prefix}\n{content}")
-    return "\n\n".join(parts)
+    return "\n\n".join(parts) or "(none)"
+
+
+def _loaded_skills(items: list[dict[str, Any]]) -> str:
+    """Format loaded skill documents for prompt injection."""
+    parts = []
+    for skill in items:
+        name = str(skill.get("name", "")).strip()
+        content = str(skill.get("content", "")).strip()
+        if not name or not content:
+            continue
+        parts.append(f"## {name}\n{content}")
+    return "\n\n".join(parts) or "(none)"

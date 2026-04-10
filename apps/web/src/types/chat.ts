@@ -25,6 +25,7 @@ export interface MessageRecord {
   content: string;
   token_usage?: TokenUsage | null;
   pending?: boolean;
+  workflow?: WorkflowSnapshot | null;
 }
 
 export interface SessionState {
@@ -44,9 +45,19 @@ export interface WorkflowLog {
   message: string;
 }
 
+export interface WorkflowTraceEntry {
+  node: string;
+  output?: string;
+  decision?: Record<string, unknown>;
+  tool_result?: Record<string, unknown>;
+}
+
 export interface WorkflowSnapshot {
   query: string;
+  requested_skill?: string | null;
+  loaded_skills?: Array<Record<string, unknown>>;
   context_items: Array<Record<string, unknown>>;
+  trace?: WorkflowTraceEntry[];
   answer: string;
   token_usage?: TokenUsage | null;
   status: string;
@@ -67,19 +78,34 @@ export interface HealthResponse {
   model: string | null;
 }
 
-export interface ChatSettings {
-  provider: string;
+export interface ChatModelConfig {
+  name: string;
   model: string | null;
   api_key: string | null;
   base_url: string | null;
   temperature: number;
+  top_p: number | null;
+  enable_thinking: boolean | null;
+}
+
+export interface EmbeddingModelConfig {
+  name: string;
+  model: string | null;
+  api_key: string | null;
+  base_url: string | null;
+}
+
+export interface ModelSettingsDocument {
+  active_chat_model: string | null;
+  active_embedding_model: string | null;
+  chat_models: ChatModelConfig[];
+  embedding_models: EmbeddingModelConfig[];
 }
 
 export interface MetaResponse {
   workflow_statuses: string[];
   workflow_steps: string[];
   default_system_prompt: string;
-  default_chat_settings: ChatSettings;
 }
 
 export interface ConfirmDialogState {

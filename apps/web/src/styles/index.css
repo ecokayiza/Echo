@@ -48,6 +48,7 @@ body {
 body,
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -79,6 +80,7 @@ button {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--border);
@@ -104,6 +106,7 @@ textarea {
 
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 textarea:focus-visible,
 .session-card:focus-visible {
   outline: 0;
@@ -195,9 +198,14 @@ textarea:focus-visible,
   height: 100%;
 }
 
-.app-shell__sidebar,
+.app-shell__sidebar {
+  display: grid;
+  gap: 0;
+}
+
 .app-shell__rail {
   display: grid;
+  align-content: start;
   gap: 0;
 }
 
@@ -265,6 +273,7 @@ textarea:focus-visible,
 .model-overview__label {
   color: var(--muted);
   line-height: 1.5;
+  min-width: 0;
 }
 
 .section-card__body {
@@ -307,6 +316,7 @@ textarea:focus-visible,
 
 .app-shell__rail {
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
 }
 
@@ -585,6 +595,9 @@ textarea:focus-visible,
 .message-row {
   width: fit-content;
   max-width: min(48rem, 96%);
+  display: flex;
+  align-items: flex-end;
+  gap: 0.24rem;
 }
 
 .message-row--user {
@@ -669,8 +682,8 @@ textarea:focus-visible,
   padding-bottom: 0;
 }
 
-.message-actions--side {
-  margin-left: auto;
+.message-actions--outside {
+  padding-bottom: 0.18rem;
 }
 
 .message-action__button {
@@ -688,6 +701,13 @@ textarea:focus-visible,
   transition:
     opacity 120ms ease,
     color 120ms ease;
+}
+
+.message-action__button--editing {
+  width: 1.75rem;
+  height: 1.75rem;
+  opacity: 0.94;
+  pointer-events: auto;
 }
 
 .message-action__button > svg {
@@ -727,9 +747,20 @@ textarea:focus-visible,
   z-index: 50;
 }
 
+.icon-menu__trigger {
+  width: 1.8rem;
+  height: 1.8rem;
+}
+
+.icon-menu__trigger > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
 .icon-menu__item {
-  width: 1.4rem;
-  height: 1.4rem;
+  width: 2rem;
+  height: 2rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -738,8 +769,8 @@ textarea:focus-visible,
 }
 
 .icon-menu__item > svg {
-  width: 1.05rem;
-  height: 1.05rem;
+  width: 1.2rem;
+  height: 1.2rem;
   display: block;
 }
 
@@ -791,6 +822,15 @@ textarea:focus-visible,
   gap: 0.42rem;
 }
 
+.form-grid {
+  display: grid;
+  gap: 0.72rem;
+}
+
+.form-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .field__hint {
   font-size: 0.78rem;
 }
@@ -806,6 +846,68 @@ textarea:focus-visible,
 
 .model-overview__value {
   font-weight: 700;
+}
+
+.model-settings-button {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.model-settings-button > svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  display: block;
+}
+
+.model-settings-button:hover,
+.model-settings-button:focus-visible {
+  color: var(--text);
+  background: #fff;
+  border-color: var(--border-strong);
+}
+
+.model-settings-page {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.model-config-list {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.model-config-card {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-soft);
+}
+
+.model-config-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.model-config-card__header p {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-top: 0.14rem;
 }
 
 .temperature-control {
@@ -949,17 +1051,26 @@ textarea:focus-visible,
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--panel-soft);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workflow-log-list {
   display: grid;
   gap: 0.24rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .workflow-log-list__item {
   font-family: var(--font-mono);
   font-size: 0.76rem;
   color: var(--muted);
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .modal {
@@ -1033,6 +1144,11 @@ textarea:focus-visible,
 .panel-toggle:focus-visible {
   color: var(--text);
   background: #fff;
+}
+
+.modal__panel--wide {
+  width: min(72rem, 100%);
+  max-height: min(90vh, 64rem);
 }
 
 @media (max-width: 1280px) {
@@ -1146,7 +1262,15 @@ textarea:focus-visible,
     grid-template-columns: 1fr;
   }
 
+  .form-grid--two {
+    grid-template-columns: 1fr;
+  }
+
   .message-card {
+    max-width: 100%;
+  }
+
+  .message-row {
     max-width: 100%;
   }
 
@@ -1170,3 +1294,4 @@ textarea:focus-visible,
     transition-duration: 0ms !important;
   }
 }
+.message-thoughts { margin-bottom: 0.5rem; background: #f9fafb; border-radius: 6px; padding: 0.5rem; border: 1px solid #e5e7eb; font-size: 0.85rem; } .message-thoughts__summary { cursor: pointer; color: #6b7280; font-weight: 500; display: flex; align-items: center; gap: 0.35rem; user-select: none; } .message-thoughts__icon { width: 1.1rem; height: 1.1rem; } .message-thoughts__content { margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px dashed #e5e7eb; color: #4b5563; max-height: 200px; overflow-y: auto; } .message-thoughts__log { margin-bottom: 0.25rem; line-height: 1.4; } .message-thoughts__log-node { font-weight: 600; color: #3b82f6; margin-right: 0.25rem; }

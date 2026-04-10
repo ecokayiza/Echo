@@ -31,6 +31,7 @@
   - `assistant`
 - workflow 节点名固定为：
   - `plan`
+  - `inject_skills`
   - `retrieve`
   - `think`
   - `answer`
@@ -187,6 +188,7 @@
   "active_node": null,
   "node_statuses": [
     { "node": "plan", "status": "completed", "detail": "可以直接开始推理。" },
+    { "node": "inject_skills", "status": "skipped", "detail": "这一路径没有进入检索准备阶段。" },
     { "node": "retrieve", "status": "skipped", "detail": "这一路径不需要外部上下文。" },
     { "node": "think", "status": "completed", "detail": "当前上下文足以回答。" },
     { "node": "answer", "status": "completed", "detail": "已生成最终答案。" }
@@ -270,6 +272,7 @@
     "active_node": null,
     "node_statuses": [
       { "node": "plan", "status": "completed", "detail": "可以直接开始推理。" },
+      { "node": "inject_skills", "status": "skipped", "detail": "这一路径没有进入检索准备阶段。" },
       { "node": "retrieve", "status": "skipped", "detail": "这一路径不需要外部上下文。" },
       { "node": "think", "status": "completed", "detail": "当前上下文足以回答。" },
       { "node": "answer", "status": "completed", "detail": "已生成最终答案。" }
@@ -312,24 +315,61 @@
 
 - 获取 workflow 枚举
 - 获取默认 system prompt
-- 获取默认模型设置
 
 响应示例：
 
 ```json
 {
   "workflow_statuses": ["queued", "running", "completed", "failed"],
-  "workflow_steps": ["plan", "retrieve", "think", "answer"],
-  "default_system_prompt": "You are the chat assistant for Eco_RAG. Be clear, grounded, and concise. If you are unsure, say so.",
-  "default_chat_settings": {
-    "provider": "openai_compatible",
-    "model": "deepseek-chat",
-    "api_key": null,
-    "base_url": "https://api.deepseek.com",
-    "temperature": 1.0
-  }
+  "workflow_steps": ["plan", "inject_skills", "retrieve", "think", "answer"],
+  "default_system_prompt": "You are the chat assistant for Eco_RAG. Be clear, grounded, and concise. If you are unsure, say so."
 }
 ```
+
+### `GET /api/model-settings`
+
+用途：
+
+- 读取根目录 `models.json` 中完整的模型配置文档
+- 包括所有 chat models、embedding models 和当前 active 选择
+
+响应示例：
+
+```json
+{
+  "active_chat_model": "DeepSeek Chat",
+  "active_embedding_model": "Default Embedding",
+  "chat_models": [
+    {
+      "name": "DeepSeek Chat",
+      "model": "deepseek-chat",
+      "api_key": "sk-xxxx",
+      "base_url": "https://api.deepseek.com",
+      "temperature": 1.0,
+      "top_p": 1.0,
+      "enable_thinking": false
+    }
+  ],
+  "embedding_models": [
+    {
+      "name": "Default Embedding",
+      "model": "text-embedding-3-small",
+      "api_key": "sk-xxxx",
+      "base_url": "https://api.openai.com/v1"
+    }
+  ]
+}
+```
+
+### `PUT /api/model-settings`
+
+用途：
+
+- 直接更新根目录 `models.json`
+
+请求体和响应体：
+
+- 与 `GET /api/model-settings` 相同
 
 ### `GET /api/sessions`
 
@@ -462,14 +502,7 @@
 ```json
 {
   "message": "请简单解释什么是 RAG。",
-  "system_prompt": "请简洁、务实地回答。",
-  "settings": {
-    "provider": "openai_compatible",
-    "model": "deepseek-chat",
-    "api_key": null,
-    "base_url": "https://api.deepseek.com",
-    "temperature": 0.7
-  }
+  "system_prompt": "请简洁、务实地回答。"
 }
 ```
 
@@ -488,15 +521,7 @@
 请求示例：
 
 ```json
-{
-  "settings": {
-    "provider": "openai_compatible",
-    "model": "deepseek-chat",
-    "api_key": null,
-    "base_url": "https://api.deepseek.com",
-    "temperature": 0.7
-  }
-}
+{}
 ```
 
 行为要求：
@@ -560,7 +585,7 @@ payload 示例：
 
 ```json
 {
-  "detail": "Chat request failed: Missing API key."
+  "detail": "Chat request failed: Missing API key. Update 'models.json' with a valid api_key."
 }
 ```
 

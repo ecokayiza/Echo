@@ -9,9 +9,10 @@ interface ModalProps {
   children: ReactNode;
   footer?: ReactNode;
   onClose: () => void;
+  panelClassName?: string;
 }
 
-export function Modal({ children, description, footer, onClose, open, title }: ModalProps) {
+export function Modal({ children, description, footer, onClose, open, panelClassName = "", title }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();
 
@@ -48,7 +49,7 @@ export function Modal({ children, description, footer, onClose, open, title }: M
         aria-describedby={description ? descriptionId : undefined}
         aria-labelledby={titleId}
         aria-modal="true"
-        className="modal__panel"
+        className={`modal__panel${panelClassName ? ` ${panelClassName}` : ""}`}
         onClick={(event) => {
           event.stopPropagation();
         }}

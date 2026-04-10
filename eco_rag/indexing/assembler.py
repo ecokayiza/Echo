@@ -107,14 +107,14 @@ class Assembler:
 if __name__ == "__main__":
     from .loader import DataLoaderFactory
     from .chunker import ChunkerFactory
-    from .embedder import HuggingFaceEmbedder
+    from .embedder import OpenAICompatibleEmbedder
     from .vector_database import VectorDatabase
 
     file_path = Config.TEST_FILE_PATH
     vector_db = VectorDatabase()
     data_loader = DataLoaderFactory()
     chunker = ChunkerFactory()
-    embedder = HuggingFaceEmbedder()
+    embedder = OpenAICompatibleEmbedder()
     assembler = Assembler(vector_db, data_loader, chunker, embedder)
     
     # print("Dpocument count in DB before storing file:", assembler.db.count())

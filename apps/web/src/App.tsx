@@ -2,12 +2,12 @@ import { useState } from "react";
 
 import { ChatHeader, MessageComposer, MessageList } from "@/components/chat";
 import { Button, Modal } from "@/components/common";
-import { ModelSettingsPanel, SessionPanel, WorkflowPanel } from "@/components/panels";
+import { ModelSettingsModal, ModelSettingsPanel, SessionPanel, WorkflowPanel } from "@/components/panels";
 import { useChatWorkspace } from "@/hooks/useChatWorkspace";
 
 export default function App() {
   const { actions, dialogs, drafts, refs, workspace } = useChatWorkspace();
-  const { activeModelName, activeSession, state } = workspace;
+  const { activeModelName, activeSession, modelNames, state } = workspace;
   const [leftHidden, setLeftHidden] = useState(false);
   const [rightHidden, setRightHidden] = useState(false);
 
@@ -103,9 +103,11 @@ export default function App() {
             <ModelSettingsPanel
               activeModelName={activeModelName}
               busy={state.busy}
-              onChange={drafts.updateModelSetting}
-              onSave={actions.saveModelSettings}
-              settings={drafts.modelSettingsDraft}
+              modelNames={modelNames}
+              onOpenSettings={actions.openModelSettings}
+              onSelectActiveModel={(name) => {
+                void actions.selectActiveChatModel(name);
+              }}
             />
 
             <WorkflowPanel workflow={state.workflow} />
@@ -145,6 +147,22 @@ export default function App() {
       >
         <p className="modal-copy">{dialogs.confirmDialog?.description}</p>
       </Modal>
+
+      <ModelSettingsModal
+        busy={state.busy}
+        onAddChatModel={drafts.addChatModel}
+        onAddEmbeddingModel={drafts.addEmbeddingModel}
+        onChangeActiveChatModel={drafts.setActiveChatModel}
+        onChangeActiveEmbeddingModel={drafts.setActiveEmbeddingModel}
+        onClose={actions.closeModelSettings}
+        onRemoveChatModel={drafts.removeChatModel}
+        onRemoveEmbeddingModel={drafts.removeEmbeddingModel}
+        onSave={actions.saveModelSettings}
+        onUpdateChatModel={drafts.updateChatModel}
+        onUpdateEmbeddingModel={drafts.updateEmbeddingModel}
+        open={drafts.modelSettingsOpen}
+        settings={drafts.modelSettingsDraft}
+      />
     </>
   );
 }

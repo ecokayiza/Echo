@@ -104,5 +104,32 @@ class ChatMemoryTests(unittest.TestCase):
             self.assertEqual(reloaded_sessions.summary()["token_usage"]["prompt_cache_hit_tokens"], 7)
             self.assertNotIn("prompt_cache_miss_tokens", payload["usage"])
 
+    def test_workflow_metadata_persists_without_entering_llm_context(self):
+        sessions = Sessions(session_id="workflow", storage={})
+        messages = Messages(sessions=sessions)
+        messages.append("user", "hello")
+        messages.append(
+            "assistant",
+            "world",
+            workflow={
+                "status": "completed",
+                "answer": "world",
+                "trace": [{"node": "plan", "output": '{"next_step":"answer"}'}],
+            },
+        )
+
+        history = messages.history()
+        context = messages.build_context()
+
+        self.assertEqual(history[-1]["workflow"]["answer"], "world")
+        self.assertEqual(history[-1]["workflow"]["trace"][0]["node"], "plan")
+        self.assertEqual(
+            context,
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "world"},
+            ],
+        )
+
 if __name__ == "__main__":
     unittest.main()
