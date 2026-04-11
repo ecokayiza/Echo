@@ -15,6 +15,9 @@ class Message(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     role: str
     content: str
+    message_type: Optional[str] = None
+    workflow_turn_id: Optional[str] = None
+    tool_name: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
     token_usage: Optional[Dict[str, Any]] = None
     workflow: Optional[Dict[str, Any]] = None

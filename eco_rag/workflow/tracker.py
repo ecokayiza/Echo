@@ -8,12 +8,12 @@ from .state import WorkflowState, WorkflowStatus, WorkflowStep
 
 @dataclass
 class WorkflowTracker:
-    """Track node state, logs, and errors for one workflow run."""
+    """Track minimal workflow status for UI updates and resume support."""
 
+    workflow_turn_id: str
     query: str
 
     def __post_init__(self):
-        """Initialize the mutable tracking fields."""
         self.status = WorkflowStatus.RUNNING.value
         self.active_node: str | None = WorkflowStep.PLAN.value
         self.node_statuses = [
@@ -22,19 +22,36 @@ class WorkflowTracker:
         ]
         self.logs: list[dict[str, Any]] = []
         self.errors: list[str] = []
-        self._set(WorkflowStep.PLAN.value, WorkflowStatus.RUNNING.value, "Preparing workflow.")
+        self._set(WorkflowStep.PLAN.value, WorkflowStatus.RUNNING.value, "Planning the next action.")
+
+    @classmethod
+    def from_snapshot(cls, snapshot: dict[str, Any], *, query: str) -> WorkflowTracker:
+        """Rebuild the tracker from a saved workflow snapshot."""
+        workflow_turn_id = str(snapshot.get("workflow_turn_id") or "").strip()
+        tracker = cls(workflow_turn_id=workflow_turn_id, query=query)
+        tracker.status = str(snapshot.get("status") or WorkflowStatus.RUNNING.value)
+        active_node = snapshot.get("active_node")
+        tracker.active_node = str(active_node) if active_node is not None else None
+        node_statuses = snapshot.get("node_statuses")
+        logs = snapshot.get("logs")
+        errors = snapshot.get("errors")
+        if isinstance(node_statuses, list) and len(node_statuses) == len(tracker.node_statuses):
+            tracker.node_statuses = [dict(item) for item in node_statuses if isinstance(item, dict)]
+        if isinstance(logs, list):
+            tracker.logs = [dict(item) for item in logs if isinstance(item, dict)]
+        if isinstance(errors, list):
+            tracker.errors = [str(item) for item in errors]
+        return tracker
 
     def start(self, node: WorkflowStep, detail: str | None = None):
         """Mark one node as running."""
         self.status = WorkflowStatus.RUNNING.value
         self.active_node = node.value
         self._set(node.value, WorkflowStatus.RUNNING.value, detail)
-        self.log(f"{node.value} started.", node=node.value)
 
     def complete(self, node: WorkflowStep, detail: str):
         """Mark one node as completed."""
         self._set(node.value, WorkflowStatus.COMPLETED.value, detail)
-        self.log(detail, node=node.value)
 
     def skip(self, node: WorkflowStep, detail: str):
         """Mark one node as skipped."""
@@ -42,10 +59,9 @@ class WorkflowTracker:
         if current["status"] != WorkflowStatus.QUEUED.value:
             return
         self._set(node.value, "skipped", detail)
-        self.log(detail, node=node.value)
 
     def log(self, message: str, *, node: str | None = None, level: str = "info"):
-        """Append one workflow log message."""
+        """Append one workflow log entry."""
         self.logs.append({"level": level, "node": node, "message": message})
 
     def fail(self, error: str, *, node: str | None = None):
@@ -59,24 +75,20 @@ class WorkflowTracker:
         self.log(error, node=node, level="error")
 
     def finish(self):
-        """Mark the workflow as completed and finalize skipped nodes."""
+        """Mark the workflow as completed and skip unused nodes."""
         self.status = WorkflowStatus.COMPLETED.value
         self.active_node = None
         for item in self.node_statuses:
             if item["status"] == WorkflowStatus.QUEUED.value:
                 item["status"] = "skipped"
-                item["detail"] = "This node was not needed in the final route."
+                item["detail"] = None
 
     def snapshot(self, state: WorkflowState) -> dict[str, Any]:
-        """Build the UI-facing workflow snapshot."""
+        """Build the minimal workflow snapshot returned to the app."""
         return {
+            "workflow_turn_id": state["workflow_turn_id"],
             "query": state["query"],
-            "requested_skill": state.get("requested_skill"),
-            "loaded_skills": list(state.get("loaded_skills", [])),
-            "context_items": list(state["context_items"]),
-            "trace": list(state.get("trace", [])),
-            "answer": state["answer"],
-            "token_usage": state["token_usage"],
+            "answer": state.get("prepared_answer", ""),
             "status": self.status,
             "active_node": self.active_node,
             "node_statuses": [dict(item) for item in self.node_statuses],
@@ -85,11 +97,9 @@ class WorkflowTracker:
         }
 
     def _get(self, node: str) -> dict[str, Any]:
-        """Return the mutable status entry for one node."""
         return next(item for item in self.node_statuses if item["node"] == node)
 
     def _set(self, node: str, status: str, detail: str | None):
-        """Replace the tracked status for one node."""
         item = self._get(node)
         item["status"] = status
         item["detail"] = detail

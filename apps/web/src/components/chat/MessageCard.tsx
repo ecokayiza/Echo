@@ -4,18 +4,25 @@ import {
   CheckIcon,
   ClipboardDocumentIcon,
   PencilSquareIcon,
+  SparklesIcon,
   TrashIcon,
   XMarkIcon,
-  SparklesIcon,
 } from "@heroicons/react/24/outline";
 import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { IconActionMenu } from "@/components/common/IconActionMenu";
 import { formatTokenTotal, formatTokenUsage } from "@/lib/format";
-import type { MessageRecord } from "@/types/chat";
+import type { MessageRecord, WorkflowSnapshot } from "@/types/chat";
+
+interface ThoughtEntry {
+  label: string;
+  content: string;
+  level?: string;
+}
 
 interface MessageCardProps {
   message: MessageRecord;
+  workflowMessages: MessageRecord[];
   onDelete: (message: MessageRecord) => void;
   onEdit: (message: MessageRecord, content: string) => void;
   onRegenerate: (message: MessageRecord) => void;
@@ -24,6 +31,7 @@ interface MessageCardProps {
 
 export function MessageCard({
   message,
+  workflowMessages,
   onDelete,
   onEdit,
   onRegenerate,
@@ -38,7 +46,9 @@ export function MessageCard({
   const usageLabel = formatTokenUsage(message.token_usage);
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
-  const canCopy = isAssistant;
+  const isReadOnly = ["plan", "think", "tool"].includes(message.message_type ?? "");
+  const canCopy = isAssistant || message.role === "tool";
+  const thoughtEntries = buildThoughtEntries(message, workflowMessages);
 
   useEffect(() => {
     if (message.pending) {
@@ -47,11 +57,11 @@ export function MessageCard({
   }, [message.pending]);
 
   useEffect(() => {
-    if (message.pending && thoughtsOpen && thoughtsContentRef.current) {
+    if (thoughtsOpen && thoughtsContentRef.current) {
       const el = thoughtsContentRef.current;
       el.scrollTop = el.scrollHeight;
     }
-  }, [message.workflow?.logs, message.pending, thoughtsOpen]);
+  }, [message.pending, message.workflow, thoughtEntries, thoughtsOpen]);
 
   useEffect(() => {
     if (!editing) {
@@ -125,16 +135,20 @@ export function MessageCard({
               },
             ]
           : []),
-        {
-          key: "edit",
-          label: "Edit message",
-          icon: PencilSquareIcon,
-          onSelect: () => {
-            setEditing(true);
-            setDraft(message.content);
-          },
-        },
-        ...(isAssistant
+        ...(!isReadOnly
+          ? [
+              {
+                key: "edit",
+                label: "Edit message",
+                icon: PencilSquareIcon,
+                onSelect: () => {
+                  setEditing(true);
+                  setDraft(message.content);
+                },
+              },
+            ]
+          : []),
+        ...(!isReadOnly && isAssistant
           ? [
               {
                 key: "regenerate",
@@ -146,7 +160,7 @@ export function MessageCard({
               },
             ]
           : []),
-        ...(isUser
+        ...(!isReadOnly && isUser
           ? [
               {
                 key: "rollback",
@@ -158,62 +172,54 @@ export function MessageCard({
               },
             ]
           : []),
-        {
-          key: "delete",
-          label: "Delete message",
-          icon: TrashIcon,
-          danger: true,
-          onSelect: () => {
-            onDelete(message);
-          },
-        },
+        ...(!isReadOnly
+          ? [
+              {
+                key: "delete",
+                label: "Delete message",
+                icon: TrashIcon,
+                danger: true,
+                onSelect: () => {
+                  onDelete(message);
+                },
+              },
+            ]
+          : []),
       ]}
       triggerClassName="message-action__button message-action__button--subtle"
       triggerLabel="Message actions"
     />
   ) : null;
 
-  const visibleLogs = message.workflow?.logs?.filter(log => {
-    if (log.level === "error") return true;
-    const msg = log.message;
-    if (msg === "Workflow created.") return false;
-    if (/^[a-zA-Z_]+ started\.$/.test(msg)) return false;
-    if (/^[A-Za-z_]+ selected '[^']+'\.$/.test(msg)) return false;
-    if (msg === "Skill catalog injected for retrieve.") return false;
-    if (msg.startsWith("This route answered without")) return false;
-    return true;
-  }) || [];
-
   return (
     <article className={`message-row message-row--${message.role}${message.pending ? " message-row--pending" : ""}`}>
       <div className={`message-card message-card--${message.role}${message.pending ? " message-card--pending" : ""}`}>
-        
-        {visibleLogs.length > 0 && (
+        {thoughtEntries.length > 0 ? (
           <details
             className="message-thoughts"
             open={thoughtsOpen}
-            onToggle={(e) => setThoughtsOpen(e.currentTarget.open)}
+            onToggle={(event) => setThoughtsOpen(event.currentTarget.open)}
           >
             <summary className="message-thoughts__summary">
               <SparklesIcon className="message-thoughts__icon" /> Thoughts
             </summary>
             <div className="message-thoughts__content" ref={thoughtsContentRef}>
-              {visibleLogs.map((log, i) => (
-                <div key={i} className="message-thoughts__log" data-level={log.level}>
-                  {log.node ? <span className="message-thoughts__log-node">[{log.node}]</span> : null}
-                  <span className="message-thoughts__log-text">{log.message}</span>
+              {thoughtEntries.map((entry, index) => (
+                <div key={`${entry.label}-${index}`} className="message-thoughts__log" data-level={entry.level}>
+                  <span className="message-thoughts__log-node">[{entry.label}]</span>
+                  <span className="message-thoughts__log-text">{entry.content}</span>
                 </div>
               ))}
             </div>
           </details>
-        )}
+        ) : null}
 
         <div
           className={`message-card__body ${editing ? "message-card__body--editing" : ""}`}
           contentEditable={editing}
           suppressContentEditableWarning
-          onInput={(e) => {
-            setDraft(e.currentTarget.innerText || "");
+          onInput={(event) => {
+            setDraft(event.currentTarget.innerText || "");
           }}
           onKeyDown={(event) => {
             if (!editing) return;
@@ -234,20 +240,20 @@ export function MessageCard({
               el.focus();
               try {
                 const range = document.createRange();
-                const sel = window.getSelection();
+                const selection = window.getSelection();
                 range.selectNodeContents(el);
                 range.collapse(false);
-                sel?.removeAllRanges();
-                sel?.addRange(range);
-              } catch (e) {}
+                selection?.removeAllRanges();
+                selection?.addRange(range);
+              } catch {}
             }
           }}
-          style={{ 
-            outline: "none", 
-            cursor: editing ? "text" : "inherit", 
+          style={{
+            outline: "none",
+            cursor: editing ? "text" : "inherit",
             whiteSpace: "pre-wrap",
             padding: editing ? "0" : undefined,
-            margin: editing ? "0" : undefined
+            margin: editing ? "0" : undefined,
           }}
         >
           {message.content}
@@ -256,10 +262,7 @@ export function MessageCard({
         {totalTokenLabel || !message.pending ? (
           <div className="message-card__footer">
             {totalTokenLabel ? (
-              <span
-                className="message-card__usage"
-                title={usageLabel || totalTokenLabel}
-              >
+              <span className="message-card__usage" title={usageLabel || totalTokenLabel}>
                 {totalTokenLabel}
               </span>
             ) : (
@@ -273,11 +276,77 @@ export function MessageCard({
         ) : null}
       </div>
 
-      {!message.pending && isUser && !editing ? (
-        <div className="message-actions message-actions--outside">
-          {menuTrigger}
-        </div>
-      ) : null}
+      {!message.pending && isUser && !editing ? <div className="message-actions message-actions--outside">{menuTrigger}</div> : null}
     </article>
   );
+}
+
+function buildThoughtEntries(message: MessageRecord, workflowMessages: MessageRecord[]): ThoughtEntry[] {
+  if (message.pending) {
+    return buildLiveThoughtEntries(message.workflow);
+  }
+  if (message.role !== "assistant" || message.message_type !== "answer") {
+    return [];
+  }
+  return workflowMessages.flatMap((entry) => {
+    if (entry.message_type === "tool") {
+      const toolBlock = extractWorkflowBlock(entry.content, "tool");
+      return toolBlock
+        ? [{ label: entry.tool_name || "tool", content: toolBlock }]
+        : [];
+    }
+    if (entry.message_type === "plan" || entry.message_type === "think") {
+      const reasoningBlock = extractWorkflowBlock(entry.content, entry.message_type);
+      return reasoningBlock
+        ? [{ label: entry.message_type, content: reasoningBlock }]
+        : [];
+    }
+    return [];
+  });
+}
+
+function buildLiveThoughtEntries(workflow: WorkflowSnapshot | null | undefined): ThoughtEntry[] {
+  if (!workflow) {
+    return [];
+  }
+
+  const entries = workflow.node_statuses
+    .filter((node) => node.status !== "queued")
+    .map((node) => ({
+      label: node.node,
+      content: node.detail || capitalize(node.status),
+    }));
+
+  return [
+    ...entries,
+    ...workflow.errors.map((error) => ({ label: "error", content: error, level: "error" })),
+  ];
+}
+
+function extractWorkflowBlock(content: string, target: string): string {
+  const sections = parseWorkflowSections(content);
+  return sections[target]?.trim() ?? "";
+}
+
+function parseWorkflowSections(content: string): Record<string, string> {
+  const sections: Record<string, string[]> = {};
+  let current: string | null = null;
+
+  for (const line of content.split(/\r?\n/)) {
+    const match = line.trim().match(/^\[([a-z_]+)\]$/i);
+    if (match) {
+      current = match[1].toLowerCase();
+      sections[current] = [];
+      continue;
+    }
+    if (current) {
+      sections[current].push(line);
+    }
+  }
+
+  return Object.fromEntries(Object.entries(sections).map(([key, value]) => [key, value.join("\n").trim()]));
+}
+
+function capitalize(value: string): string {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
 }

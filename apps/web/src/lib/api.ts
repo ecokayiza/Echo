@@ -1,4 +1,5 @@
 import type {
+  DatabaseState,
   HealthResponse,
   MetaResponse,
   ModelSettingsDocument,
@@ -32,6 +33,33 @@ export const api = {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
+    });
+  },
+  listDatabases() {
+    return requestJson<DatabaseState>("/api/databases");
+  },
+  createDatabase(payload?: { name?: string | null; embedding_model_name?: string | null }) {
+    return requestJson<DatabaseState>("/api/databases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    });
+  },
+  renameDatabase(databaseId: string, name: string) {
+    return requestJson<DatabaseState>(`/api/databases/${encodeURIComponent(databaseId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+  },
+  selectDatabase(databaseId: string) {
+    return requestJson<DatabaseState>(`/api/databases/${encodeURIComponent(databaseId)}/select`, {
+      method: "POST",
+    });
+  },
+  deleteDatabase(databaseId: string) {
+    return requestJson<DatabaseState>(`/api/databases/${encodeURIComponent(databaseId)}`, {
+      method: "DELETE",
     });
   },
   listSessions() {

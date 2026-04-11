@@ -3,8 +3,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -21,14 +20,21 @@ from eco_rag.chat.registry import (
     save_model_settings_document,
 )
 from eco_rag.config import Config
+from eco_rag.indexing import (
+    VectorDatabase,
+    create_database_settings,
+    delete_database_settings,
+    ensure_database_settings_document,
+    list_database_settings,
+    rename_database_settings,
+    resolve_database_embedding_settings,
+    select_database_settings,
+)
 from eco_rag.workflow import WorkflowStatus, WorkflowStep
+from eco_rag.workflow.prompts import default_system_prompt
 
 WEB_DIR = Config.ROOT_DIR / "apps" / "web"
 WEB_DIST_DIR = WEB_DIR / "dist"
-DEFAULT_SYSTEM_PROMPT = (
-    "You are the chat assistant for Eco_RAG. "
-    "Be clear, grounded, and concise. If you are unsure, say so."
-)
 
 
 class SessionSummaryResponse(BaseModel):
@@ -47,6 +53,21 @@ class SessionStateResponse(BaseModel):
     messages: list[dict[str, Any]]
 
 
+class DatabaseSummaryResponse(BaseModel):
+    id: str
+    name: str
+    collection_name: str
+    embedding_model_name: str
+    document_count: int
+    created_at: str
+    updated_at: str
+
+
+class DatabaseStateResponse(BaseModel):
+    active_database_id: str | None
+    databases: list[DatabaseSummaryResponse]
+
+
 class CreateSessionRequest(BaseModel):
     title: str | None = None
     session_id: str | None = None
@@ -58,6 +79,15 @@ class UpdateSessionRequest(BaseModel):
 
 class UpdateSystemPromptRequest(BaseModel):
     content: str | None = None
+
+
+class CreateDatabaseRequest(BaseModel):
+    name: str | None = None
+    embedding_model_name: str | None = None
+
+
+class UpdateDatabaseRequest(BaseModel):
+    name: str = Field(min_length=1)
 
 
 class ChatModelSettingsRequest(BaseModel):
@@ -131,6 +161,8 @@ def to_sse(event: str, payload: dict[str, Any]) -> str:
 
 
 def create_app(chat_service: ChatService | None = None):
+    ensure_database_settings_document()
+
     app = FastAPI(
         title="Eco_RAG API",
         version="0.1.0",
@@ -149,10 +181,11 @@ def create_app(chat_service: ChatService | None = None):
 
     @app.get("/api/meta")
     def meta():
+        prompt = service.default_system_prompt() if hasattr(service, "default_system_prompt") else default_system_prompt()
         return {
             "workflow_statuses": [status.value for status in WorkflowStatus],
             "workflow_steps": [step.value for step in WorkflowStep],
-            "default_system_prompt": DEFAULT_SYSTEM_PROMPT,
+            "default_system_prompt": prompt,
         }
 
     @app.get("/api/model-settings", response_model=ModelSettingsDocumentRequest)
@@ -162,6 +195,50 @@ def create_app(chat_service: ChatService | None = None):
     @app.put("/api/model-settings", response_model=ModelSettingsDocumentRequest)
     def update_model_settings(payload: ModelSettingsDocumentRequest):
         return ModelSettingsDocumentRequest.from_document(save_model_settings_document(payload.to_document()))
+
+    @app.get("/api/databases", response_model=DatabaseStateResponse)
+    def list_databases():
+        return DatabaseStateResponse(**_database_state_payload())
+
+    @app.post("/api/databases", response_model=DatabaseStateResponse)
+    def create_database(payload: CreateDatabaseRequest | None = None):
+        request = payload or CreateDatabaseRequest()
+        try:
+            create_database_settings(name=request.name, embedding_model_name=request.embedding_model_name, select=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return DatabaseStateResponse(**_database_state_payload())
+
+    @app.patch("/api/databases/{database_id}", response_model=DatabaseStateResponse)
+    def update_database(database_id: str, payload: UpdateDatabaseRequest):
+        try:
+            rename_database_settings(database_id, payload.name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return DatabaseStateResponse(**_database_state_payload())
+
+    @app.post("/api/databases/{database_id}/select", response_model=DatabaseStateResponse)
+    def select_database(database_id: str):
+        try:
+            select_database_settings(database_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return DatabaseStateResponse(**_database_state_payload())
+
+    @app.delete("/api/databases/{database_id}", response_model=DatabaseStateResponse)
+    def delete_database(database_id: str):
+        document = list_database_settings()
+        database = next((item for item in document.databases if item.id == database_id), None)
+        try:
+            delete_database_settings(database_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if database is not None:
+            try:
+                VectorDatabase(collection_name=database.collection_name).delete_collection()
+            except Exception:
+                pass
+        return DatabaseStateResponse(**_database_state_payload())
 
     @app.get("/api/sessions", response_model=list[SessionSummaryResponse])
     def list_sessions():
@@ -244,16 +321,10 @@ def create_app(chat_service: ChatService | None = None):
         return SessionStateResponse(**state.to_dict())
 
     @app.post("/api/sessions/{session_id}/messages/{message_id}/regenerate/stream")
-    async def stream_regenerate_message(
-        session_id: str,
-        message_id: str,
-    ):
+    async def stream_regenerate_message(session_id: str, message_id: str):
         async def event_stream():
             try:
-                async for item in service.stream_regenerate_message(
-                    session_id,
-                    message_id,
-                ):
+                async for item in service.stream_regenerate_message(session_id, message_id):
                     yield to_sse(item["event"], item["data"])
             except ValueError as exc:
                 yield to_sse("error", {"detail": str(exc)})
@@ -266,6 +337,32 @@ def create_app(chat_service: ChatService | None = None):
         app.mount("/ui", StaticFiles(directory=str(WEB_DIST_DIR), html=True), name="web")
 
     return app
+
+
+def _database_state_payload() -> dict[str, Any]:
+    document = list_database_settings()
+    databases = []
+    for database in document.databases:
+        try:
+            count = VectorDatabase(collection_name=database.collection_name).count()
+        except Exception:
+            count = 0
+        try:
+            embedding_model_name = resolve_database_embedding_settings(database).name
+        except Exception:
+            embedding_model_name = database.embedding_model_name
+        databases.append(
+            {
+                "id": database.id,
+                "name": database.name,
+                "collection_name": database.collection_name,
+                "embedding_model_name": embedding_model_name,
+                "document_count": count,
+                "created_at": database.created_at,
+                "updated_at": database.updated_at,
+            }
+        )
+    return {"active_database_id": document.active_database_id, "databases": databases}
 
 
 app = create_app()

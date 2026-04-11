@@ -9,30 +9,24 @@ from apps.api.app.main import create_app
 from eco_rag.chat.service import SessionState
 from eco_rag.config import Config
 
+READ_ONLY_TYPES = {"plan", "think", "tool"}
 
-def workflow_payload(query: str, *, status: str, active_node: str | None, answer: str = ""):
+
+def workflow_payload(query: str, *, status: str, active_node: str | None, answer: str = "", workflow_turn_id: str = "wf-1"):
     return {
+        "workflow_turn_id": workflow_turn_id,
         "query": query,
-        "context_items": [],
         "answer": answer,
-        "token_usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16} if answer else None,
         "status": status,
         "active_node": active_node,
         "node_statuses": [
-            {"node": "plan", "status": "completed", "detail": "Planner decided the route."},
-            {
-                "node": "inject_skills",
-                "status": "skipped" if status == "completed" else "queued",
-                "detail": "Not needed in this route." if status == "completed" else None,
-            },
-            {"node": "retrieve", "status": "skipped" if status == "completed" else "queued", "detail": "Not needed in this route." if status == "completed" else None},
-            {"node": "think", "status": "running" if active_node == "think" else ("completed" if status == "completed" else "queued"), "detail": "Thinking." if active_node == "think" else ("Context is enough." if status == "completed" else None)},
-            {"node": "answer", "status": "completed" if status == "completed" else "queued", "detail": "Generated final answer." if status == "completed" else None},
+            {"node": "plan", "status": "completed", "detail": "Selected 'retrieve'." if status == "completed" else "Choosing the next step."},
+            {"node": "retrieve", "status": "completed" if status == "completed" else "queued", "detail": "Accepted 'legacy_search'." if status == "completed" else None},
+            {"node": "tool", "status": "completed" if status == "completed" else "queued", "detail": "Completed round 1." if status == "completed" else None},
+            {"node": "think", "status": "running" if active_node == "think" else ("completed" if status == "completed" else "queued"), "detail": "Reasoning over the tool results." if active_node == "think" else ("Selected 'answer'." if status == "completed" else None)},
+            {"node": "answer", "status": "completed" if status == "completed" else "queued", "detail": "Final answer emitted." if status == "completed" else None},
         ],
-        "logs": [
-            {"level": "info", "node": "plan", "message": "plan started."},
-            {"level": "info", "node": "plan", "message": "Planner decided the route."},
-        ],
+        "logs": [],
         "errors": [],
     }
 
@@ -40,6 +34,9 @@ def workflow_payload(query: str, *, status: str, active_node: str | None, answer
 class FakeChatService:
     def __init__(self):
         self._sessions: dict[str, dict] = {}
+
+    def default_system_prompt(self) -> str:
+        return "System prompt."
 
     def list_sessions(self):
         return sorted([self._summary(session) for session in self._sessions.values()], key=lambda item: item["updated_at"], reverse=True)
@@ -51,7 +48,7 @@ class FakeChatService:
             "title": title or "New Session",
             "created_at": "2026-04-01T00:00:00+00:00",
             "updated_at": "2026-04-01T00:00:00+00:00",
-            "messages": [],
+            "messages": [{"id": "sys-1", "role": "system", "content": self.default_system_prompt(), "message_type": "system"}],
         }
         self._sessions[resolved] = session
         return self._summary(session)
@@ -64,7 +61,7 @@ class FakeChatService:
                 "title": "New Session",
                 "created_at": "2026-04-01T00:00:00+00:00",
                 "updated_at": "2026-04-01T00:00:00+00:00",
-                "messages": [],
+                "messages": [{"id": "sys-1", "role": "system", "content": self.default_system_prompt(), "message_type": "system"}],
             },
         )
         return SessionState(session=self._summary(session), messages=list(session["messages"]))
@@ -85,12 +82,14 @@ class FakeChatService:
                 "title": "New Session",
                 "created_at": "2026-04-01T00:00:00+00:00",
                 "updated_at": "2026-04-01T00:00:00+00:00",
-                "messages": [],
+                "messages": [{"id": "sys-1", "role": "system", "content": self.default_system_prompt(), "message_type": "system"}],
             },
         )
         session["messages"] = [item for item in session["messages"] if item["role"] != "system"]
-        if content:
-            session["messages"].insert(0, {"id": "sys-1", "role": "system", "content": content})
+        session["messages"].insert(
+            0,
+            {"id": "sys-1", "role": "system", "content": content or self.default_system_prompt(), "message_type": "system"},
+        )
         return SessionState(session=self._summary(session), messages=list(session["messages"]))
 
     async def stream_message(self, message: str, session_id: str, system_prompt: str | None = None, settings=None):
@@ -101,22 +100,62 @@ class FakeChatService:
                 "title": "New Session",
                 "created_at": "2026-04-01T00:00:00+00:00",
                 "updated_at": "2026-04-01T00:00:00+00:00",
-                "messages": [],
+                "messages": [{"id": "sys-1", "role": "system", "content": self.default_system_prompt(), "message_type": "system"}],
             },
         )
+        workflow_turn_id = "wf-1"
         if system_prompt:
-            session["messages"] = [item for item in session["messages"] if item["role"] != "system"]
-            session["messages"].insert(0, {"id": "sys-1", "role": "system", "content": system_prompt})
-        session["messages"].append({"id": "user-1", "role": "user", "content": message})
+            session["messages"][0] = {"id": "sys-1", "role": "system", "content": system_prompt, "message_type": "system"}
 
-        yield {"event": "workflow", "data": workflow_payload(message, status="running", active_node="think")}
+        session["messages"] = [item for item in session["messages"] if item["role"] == "system"]
+        session["messages"].append({"id": "user-1", "role": "user", "content": message, "message_type": "user"})
+
+        yield {"event": "workflow", "data": workflow_payload(message, status="running", active_node="think", workflow_turn_id=workflow_turn_id)}
         yield {"event": "chunk", "data": {"delta": "reply:", "content": f"reply:{message}"}}
 
+        session["messages"].extend(
+            [
+                {
+                    "id": "plan-1",
+                    "role": "assistant",
+                    "content": "[plan]\nNeed retrieval.\n[next]\nretrieve\n[retrieve]\nlegacy_search(\"hello\")",
+                    "message_type": "plan",
+                    "workflow_turn_id": workflow_turn_id,
+                    "token_usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+                },
+                {
+                    "id": "tool-1",
+                    "role": "tool",
+                    "content": "[tool]\nlegacy_search(query='hello')\n\n1.\ncontext::hello",
+                    "message_type": "tool",
+                    "workflow_turn_id": workflow_turn_id,
+                    "tool_name": "legacy_search",
+                },
+                {
+                    "id": "think-1",
+                    "role": "assistant",
+                    "content": "[think]\nThe evidence is enough.\n[next]\nanswer\n[answer]\nreply:hello",
+                    "message_type": "think",
+                    "workflow_turn_id": workflow_turn_id,
+                    "token_usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
+                },
+            ]
+        )
+
+        snapshot = workflow_payload(
+            message,
+            status="completed",
+            active_node=None,
+            answer=f"reply:{message}",
+            workflow_turn_id=workflow_turn_id,
+        )
         session["messages"].append(
             {
                 "id": "assistant-1",
                 "role": "assistant",
                 "content": f"reply:{message}",
+                "message_type": "answer",
+                "workflow_turn_id": workflow_turn_id,
                 "token_usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
             }
         )
@@ -127,44 +166,81 @@ class FakeChatService:
                 "session": self._summary(session),
                 "messages": list(session["messages"]),
                 "reply": f"reply:{message}",
-                "token_usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
-                "workflow": workflow_payload(message, status="completed", active_node=None, answer=f"reply:{message}"),
+                "token_usage": {"prompt_tokens": 18, "completion_tokens": 7, "total_tokens": 25},
+                "workflow": snapshot,
             },
         }
 
     async def update_message(self, session_id: str, message_id: str, content: str):
         session = self._sessions[session_id]
-        for message in session["messages"]:
-            if message["id"] == message_id:
-                message["content"] = content
-                break
+        message = self._find_message(session, message_id)
+        if message.get("message_type") in READ_ONLY_TYPES:
+            raise ValueError("Workflow messages are read-only.")
+        message["content"] = content
         return SessionState(session=self._summary(session), messages=list(session["messages"]))
 
     async def delete_message(self, session_id: str, message_id: str):
         session = self._sessions[session_id]
-        session["messages"] = [item for item in session["messages"] if item["id"] != message_id]
+        message = self._find_message(session, message_id)
+        if message.get("message_type") in READ_ONLY_TYPES:
+            raise ValueError("Workflow messages are read-only.")
+        if message["role"] == "system":
+            message["content"] = self.default_system_prompt()
+        else:
+            session["messages"] = [item for item in session["messages"] if item["id"] != message_id]
         return SessionState(session=self._summary(session), messages=list(session["messages"]))
 
     async def rollback_message(self, session_id: str, message_id: str):
         session = self._sessions[session_id]
-        for index, message in enumerate(session["messages"]):
-            if message["id"] == message_id:
+        message = self._find_message(session, message_id)
+        if message.get("message_type") in READ_ONLY_TYPES:
+            raise ValueError("Workflow messages are read-only.")
+        for index, item in enumerate(session["messages"]):
+            if item["id"] == message_id:
                 session["messages"] = session["messages"][: index + 1]
                 break
         return SessionState(session=self._summary(session), messages=list(session["messages"]))
 
     async def stream_regenerate_message(self, session_id: str, message_id: str, settings=None):
         session = self._sessions[session_id]
-        session["messages"] = [item for item in session["messages"] if item["role"] != "assistant"]
-        yield {"event": "workflow", "data": workflow_payload("hello", status="running", active_node="think")}
+        session["messages"] = [item for item in session["messages"] if item["message_type"] not in {"plan", "think", "tool", "answer"}]
+        workflow_turn_id = "wf-2"
+        yield {"event": "workflow", "data": workflow_payload("hello", status="running", active_node="think", workflow_turn_id=workflow_turn_id)}
         yield {"event": "chunk", "data": {"delta": "reply:", "content": "reply:regenerated"}}
-        session["messages"].append(
-            {
-                "id": "assistant-2",
-                "role": "assistant",
-                "content": "reply:regenerated",
-                "token_usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
-            }
+        snapshot = workflow_payload("hello", status="completed", active_node=None, answer="reply:regenerated", workflow_turn_id=workflow_turn_id)
+        session["messages"].extend(
+            [
+                {
+                    "id": "plan-2",
+                    "role": "assistant",
+                    "content": "[plan]\nNeed retrieval.\n[next]\nretrieve\n[retrieve]\nlegacy_search(\"hello\")",
+                    "message_type": "plan",
+                    "workflow_turn_id": workflow_turn_id,
+                },
+                {
+                    "id": "tool-2",
+                    "role": "tool",
+                    "content": "[tool]\nlegacy_search(query='hello')\n\n1.\ncontext::hello",
+                    "message_type": "tool",
+                    "workflow_turn_id": workflow_turn_id,
+                    "tool_name": "legacy_search",
+                },
+                {
+                    "id": "think-2",
+                    "role": "assistant",
+                    "content": "[think]\nThe evidence is enough.\n[next]\nanswer\n[answer]\nreply:regenerated",
+                    "message_type": "think",
+                    "workflow_turn_id": workflow_turn_id,
+                },
+                {
+                    "id": "assistant-2",
+                    "role": "assistant",
+                    "content": "reply:regenerated",
+                    "message_type": "answer",
+                    "workflow_turn_id": workflow_turn_id,
+                    "token_usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
+                },
+            ]
         )
         yield {
             "event": "done",
@@ -173,12 +249,16 @@ class FakeChatService:
                 "messages": list(session["messages"]),
                 "reply": "reply:regenerated",
                 "token_usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
-                "workflow": {
-                    **workflow_payload("hello", status="completed", active_node=None, answer="reply:regenerated"),
-                    "token_usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
-                },
+                "workflow": snapshot,
             },
         }
+
+    @staticmethod
+    def _find_message(session: dict, message_id: str) -> dict:
+        for message in session["messages"]:
+            if message["id"] == message_id:
+                return message
+        raise ValueError("Message not found.")
 
     @staticmethod
     def _summary(session: dict):
@@ -187,13 +267,15 @@ class FakeChatService:
             for key, value in (message.get("token_usage") or {}).items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     token_usage[key] = token_usage.get(key, 0) + value
+        preview = next((item["content"][:80] for item in reversed(session["messages"]) if item["role"] != "system"), "")
+        message_count = len([item for item in session["messages"] if item["role"] != "system"])
         return {
             "session_id": session["session_id"],
             "title": session["title"],
             "created_at": session["created_at"],
             "updated_at": session["updated_at"],
-            "message_count": len(session["messages"]),
-            "preview": session["messages"][-1]["content"][:80] if session["messages"] else "",
+            "message_count": message_count,
+            "preview": preview,
             "token_usage": token_usage,
             "total_tokens": int(token_usage.get("total_tokens", 0)),
         }
@@ -203,7 +285,11 @@ class ApiChatTests(unittest.TestCase):
     def setUp(self):
         self._temp_dir = tempfile.TemporaryDirectory()
         self._previous_models_path = Config.MODELS_PATH
+        self._previous_databases_path = Config.DATABASES_PATH
+        self._previous_db_path = Config.DB_PATH
         Config.MODELS_PATH = type(Config.MODELS_PATH)(self._temp_dir.name) / "models.json"
+        Config.DATABASES_PATH = type(Config.DATABASES_PATH)(self._temp_dir.name) / "databases.json"
+        Config.DB_PATH = type(Config.DB_PATH)(self._temp_dir.name) / "db"
         Config.MODELS_PATH.write_text(
             json.dumps(
                 {
@@ -238,9 +324,19 @@ class ApiChatTests(unittest.TestCase):
 
     def tearDown(self):
         Config.MODELS_PATH = self._previous_models_path
-        self._temp_dir.cleanup()
+        Config.DATABASES_PATH = self._previous_databases_path
+        Config.DB_PATH = self._previous_db_path
+        try:
+            self._temp_dir.cleanup()
+        except PermissionError:
+            pass
 
-    def test_session_lifecycle(self):
+    def test_meta_and_session_lifecycle(self):
+        meta = self.client.get("/api/meta")
+        self.assertEqual(meta.status_code, 200)
+        self.assertEqual(meta.json()["workflow_steps"], ["plan", "retrieve", "tool", "think", "answer"])
+        self.assertEqual(meta.json()["default_system_prompt"], "System prompt.")
+
         created = self.client.post("/api/sessions", json={"session_id": "s1", "title": "Session One"})
         self.assertEqual(created.status_code, 200)
         self.assertEqual(created.json()["title"], "Session One")
@@ -262,14 +358,26 @@ class ApiChatTests(unittest.TestCase):
         self.assertIn("event: chunk", body)
         self.assertIn("event: done", body)
         self.assertIn("\"active_node\": \"think\"", body)
+        self.assertIn("\"message_type\": \"plan\"", body)
+        self.assertIn("\"message_type\": \"tool\"", body)
 
         state = self.client.get("/api/sessions/s2").json()
+        self.assertEqual(state["messages"][0]["role"], "system")
+        self.assertNotIn("workflow", next(item for item in state["messages"] if item.get("message_type") == "answer"))
         user_message_id = next(item["id"] for item in state["messages"] if item["role"] == "user")
-        assistant_message_id = next(item["id"] for item in state["messages"] if item["role"] == "assistant")
+        plan_message_id = next(item["id"] for item in state["messages"] if item.get("message_type") == "plan")
+        tool_message_id = next(item["id"] for item in state["messages"] if item.get("message_type") == "tool")
+        assistant_message_id = next(item["id"] for item in state["messages"] if item.get("message_type") == "answer")
 
         updated = self.client.patch(f"/api/sessions/s2/messages/{user_message_id}", json={"content": "edited"})
         self.assertEqual(updated.status_code, 200)
-        self.assertEqual(updated.json()["messages"][1]["content"], "edited")
+        self.assertEqual(next(item for item in updated.json()["messages"] if item["id"] == user_message_id)["content"], "edited")
+
+        rejected_edit = self.client.patch(f"/api/sessions/s2/messages/{plan_message_id}", json={"content": "changed"})
+        self.assertEqual(rejected_edit.status_code, 400)
+
+        rejected_delete = self.client.delete(f"/api/sessions/s2/messages/{tool_message_id}")
+        self.assertEqual(rejected_delete.status_code, 400)
 
         system_prompt = self.client.patch("/api/sessions/s2/system-prompt", json={"content": "Stay practical."})
         self.assertEqual(system_prompt.status_code, 200)
@@ -280,23 +388,62 @@ class ApiChatTests(unittest.TestCase):
 
         deleted = self.client.delete(f"/api/sessions/s2/messages/{assistant_message_id}")
         self.assertEqual(deleted.status_code, 200)
-        remaining_roles = [item["role"] for item in deleted.json()["messages"]]
-        self.assertEqual(remaining_roles, ["system", "user"])
+        remaining_types = [item.get("message_type") for item in deleted.json()["messages"]]
+        self.assertNotIn("answer", remaining_types)
+
+    def test_database_routes(self):
+        listed = self.client.get("/api/databases")
+        self.assertEqual(listed.status_code, 200)
+        payload = listed.json()
+        self.assertEqual(len(payload["databases"]), 1)
+        self.assertEqual(payload["active_database_id"], payload["databases"][0]["id"])
+
+        created = self.client.post(
+            "/api/databases",
+            json={"name": "Research Notes", "embedding_model_name": "Test Embedding"},
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertEqual(len(created.json()["databases"]), 2)
+        created_database = next(item for item in created.json()["databases"] if item["name"] == "Research Notes")
+
+        renamed = self.client.patch(f"/api/databases/{created_database['id']}", json={"name": "Renamed Notes"})
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(
+            next(item for item in renamed.json()["databases"] if item["id"] == created_database["id"])["name"],
+            "Renamed Notes",
+        )
+
+        selected = self.client.post(f"/api/databases/{created_database['id']}/select")
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(selected.json()["active_database_id"], created_database["id"])
+
+        deleted = self.client.delete(f"/api/databases/{created_database['id']}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(len(deleted.json()["databases"]), 1)
 
     def test_stream_regenerate_endpoint(self):
         self.client.post("/api/sessions", json={"session_id": "stream"})
-        with self.client.stream("POST", "/api/sessions/stream/messages/user-1/regenerate/stream", json={}) as response:
+        with self.client.stream("POST", "/api/sessions/stream/messages/stream", json={"message": "hello"}) as response:
+            self.assertEqual(response.status_code, 200)
+            _ = "".join(response.iter_text())
+
+        with self.client.stream("POST", "/api/sessions/stream/messages/assistant-1/regenerate/stream", json={}) as response:
             self.assertEqual(response.status_code, 200)
             body = "".join(response.iter_text())
         self.assertIn("event: workflow", body)
         self.assertIn("event: chunk", body)
         self.assertIn("reply:regenerated", body)
+        self.assertIn("\"workflow_turn_id\": \"wf-2\"", body)
 
     def test_sync_chat_routes_are_removed(self):
         send = self.client.post("/api/sessions/sync/messages", json={"message": "hello"})
         regenerate = self.client.post("/api/sessions/sync/messages/user-1/regenerate", json={})
+        local_embedding = self.client.post("/local-embedding/v1/embeddings", json={"input": "hello", "model": "test"})
+        local_download = self.client.post("/api/local-embedding/download")
         self.assertEqual(send.status_code, 404)
         self.assertEqual(regenerate.status_code, 404)
+        self.assertEqual(local_embedding.status_code, 404)
+        self.assertEqual(local_download.status_code, 404)
 
     def test_model_settings_endpoints_read_and_write_models_json(self):
         current = self.client.get("/api/model-settings")

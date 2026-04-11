@@ -10,38 +10,42 @@ from langchain_core.tools import tool
 
 
 @tool
-def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
-    """Search the public web for fresh or external information."""
-    cleaned = " ".join((query or "").strip().split())
+def web_search(query: str | None = None, queries: list[str] | None = None, max_results: int = 5) -> dict[str, Any]:
+    """Search the public web for one or more fresh or external queries."""
+    prepared_queries = [
+        " ".join(str(item or "").strip().split())
+        for item in ([query] if query is not None else []) + list(queries or [])
+    ]
+    prepared_queries = [item for item in prepared_queries if item]
     limit = max(1, min(int(max_results or 5), 8))
-    if not cleaned:
+    if not prepared_queries:
         return {
             "type": "context",
             "skill_name": "web_search",
             "items": [],
-            "query": cleaned,
             "error": "Query cannot be empty.",
         }
 
-    request = Request(
-        f"https://duckduckgo.com/html/?q={quote_plus(cleaned)}&kl=us-en",
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-
     try:
-        with urlopen(request, timeout=12) as response:
-            html = response.read().decode("utf-8", errors="replace")
-        items = _parse_results(html)[:limit]
+        items = []
+        for cleaned in prepared_queries:
+            request = Request(
+                f"https://duckduckgo.com/html/?q={quote_plus(cleaned)}&kl=us-en",
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+            )
+            with urlopen(request, timeout=12) as response:
+                html = response.read().decode("utf-8", errors="replace")
+            items.extend(_parse_results(html))
+        items = _dedupe_items(items)[:limit]
     except Exception as exc:
         return {
             "type": "context",
             "skill_name": "web_search",
             "items": [],
-            "query": cleaned,
             "error": str(exc),
         }
 
@@ -49,8 +53,6 @@ def web_search(query: str, max_results: int = 5) -> dict[str, Any]:
         "type": "context",
         "skill_name": "web_search",
         "items": items,
-        "query": cleaned,
-        "count": len(items),
     }
 
 
@@ -132,9 +134,14 @@ def _parse_results(html: str) -> list[dict[str, str | None]]:
     parser.feed(html)
     parser.close()
 
+    return _dedupe_items(parser.items)
+
+
+def _dedupe_items(items: list[dict[str, str | None]]) -> list[dict[str, str | None]]:
+    """Deduplicate search results while preserving order."""
     deduped: list[dict[str, str | None]] = []
     seen: set[tuple[str, str, str | None]] = set()
-    for item in parser.items:
+    for item in items:
         key = (str(item.get("title", "")), str(item.get("content", "")), item.get("url"))
         if key in seen:
             continue

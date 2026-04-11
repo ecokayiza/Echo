@@ -1,5 +1,6 @@
 import json
 from dataclasses import asdict, dataclass, field
+from hashlib import sha1
 
 from ..config import Config
 from .chat_model import BaseChatModel, OpenAIChatModel
@@ -30,6 +31,23 @@ class ModelSettingsDocument:
     active_embedding_model: str | None = None
     chat_models: list[ChatModelSettings] = field(default_factory=list)
     embedding_models: list[EmbeddingModelSettings] = field(default_factory=list)
+
+
+def local_embedding_model_settings() -> EmbeddingModelSettings:
+    """Build the default standalone local embedding server settings."""
+    return EmbeddingModelSettings(
+        name=Config.LOCAL_EMBEDDING_MODEL_NAME,
+        model=Config.DEFAULT_EMBEDDING_MODEL,
+        api_key=Config.LOCAL_EMBEDDING_API_KEY,
+        base_url=Config.LOCAL_EMBEDDING_BASE_URL,
+    )
+
+
+def embedding_model_key(settings: EmbeddingModelSettings | dict | None = None) -> str:
+    """Create one stable identity key for an embedding model pairing."""
+    resolved = normalize_embedding_model_settings(settings)
+    payload = f"{resolved.model or ''}|{resolved.base_url or ''}"
+    return sha1(payload.encode("utf-8")).hexdigest()
 
 
 def _trim_or_none(value):
@@ -101,12 +119,7 @@ def normalize_embedding_model_settings(
 
 def default_model_settings_document() -> ModelSettingsDocument:
     chat_model = normalize_chat_model_settings({"name": "Default Chat Model"})
-    embedding_model = normalize_embedding_model_settings(
-        {
-            "name": "Default Embedding Model",
-            "model": Config.DEFAULT_EMBEDDING_MODEL,
-        }
-    )
+    embedding_model = normalize_embedding_model_settings(local_embedding_model_settings())
     return ModelSettingsDocument(
         active_chat_model=chat_model.name,
         active_embedding_model=embedding_model.name,
@@ -131,9 +144,7 @@ def normalize_model_settings_document(document: ModelSettingsDocument | dict | N
 
     if _is_legacy_chat_settings(payload):
         migrated_chat = normalize_chat_model_settings(payload, fallback_name="Migrated Chat Model")
-        default_embedding = normalize_embedding_model_settings(
-            {"name": "Default Embedding Model", "model": Config.DEFAULT_EMBEDDING_MODEL}
-        )
+        default_embedding = normalize_embedding_model_settings(local_embedding_model_settings())
         return ModelSettingsDocument(
             active_chat_model=migrated_chat.name,
             active_embedding_model=default_embedding.name,
@@ -229,6 +240,27 @@ def get_active_embedding_model_settings(*, required: bool = True) -> EmbeddingMo
     raise ValueError(
         f"No embedding model configured. Update '{Config.MODELS_PATH.name}' with at least one embedding model."
     )
+
+
+def resolve_embedding_model_settings(
+    *,
+    name: str | None = None,
+    key: str | None = None,
+    required: bool = True,
+) -> EmbeddingModelSettings | None:
+    """Resolve one embedding model by pairing key or display name."""
+    document = load_model_settings_document()
+    if key:
+        match = next((item for item in document.embedding_models if embedding_model_key(item) == key), None)
+        if match is not None:
+            return match
+    if name:
+        match = next((item for item in document.embedding_models if item.name == name), None)
+        if match is not None:
+            return match
+    if not required:
+        return None
+    raise ValueError("The paired embedding model is not available in models.json.")
 
 
 def build_chat_model(settings: ChatModelSettings | None = None) -> BaseChatModel:

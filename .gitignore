@@ -3,6 +3,11 @@
 db/
 temp/
 data/
+models/*
+!models/
+!models/README.md
+!models/qwen3_embedding_service.py
+memory/databases.json
 __pycache__/
 *.py[cod]
 .pytest_cache/

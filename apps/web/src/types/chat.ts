@@ -17,12 +17,15 @@ export interface SessionSummary {
   total_tokens: number;
 }
 
-export type MessageRole = "system" | "user" | "assistant";
+export type MessageRole = "system" | "user" | "assistant" | "tool";
 
 export interface MessageRecord {
   id: string;
   role: MessageRole;
   content: string;
+  message_type?: string | null;
+  workflow_turn_id?: string | null;
+  tool_name?: string | null;
   token_usage?: TokenUsage | null;
   pending?: boolean;
   workflow?: WorkflowSnapshot | null;
@@ -31,6 +34,21 @@ export interface MessageRecord {
 export interface SessionState {
   session: SessionSummary;
   messages: MessageRecord[];
+}
+
+export interface DatabaseRecord {
+  id: string;
+  name: string;
+  collection_name: string;
+  embedding_model_name: string;
+  document_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DatabaseState {
+  active_database_id: string | null;
+  databases: DatabaseRecord[];
 }
 
 export interface WorkflowNodeStatus {
@@ -45,21 +63,10 @@ export interface WorkflowLog {
   message: string;
 }
 
-export interface WorkflowTraceEntry {
-  node: string;
-  output?: string;
-  decision?: Record<string, unknown>;
-  tool_result?: Record<string, unknown>;
-}
-
 export interface WorkflowSnapshot {
+  workflow_turn_id?: string | null;
   query: string;
-  requested_skill?: string | null;
-  loaded_skills?: Array<Record<string, unknown>>;
-  context_items: Array<Record<string, unknown>>;
-  trace?: WorkflowTraceEntry[];
   answer: string;
-  token_usage?: TokenUsage | null;
   status: string;
   node_statuses: WorkflowNodeStatus[];
   active_node: string | null;

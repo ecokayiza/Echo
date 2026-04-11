@@ -1,39 +1,18 @@
 from __future__ import annotations
 
-import json
+import ast
+import re
 from dataclasses import dataclass
-from typing import Any, TypedDict
+from typing import Any
 
 from langchain_core.tools import BaseTool
+from langgraph.config import get_stream_writer
 
-from ..chat.chat_model import BaseChatModel
-from ..skills import load_skill_document
-from .prompts import answer_messages, plan_messages, retrieve_messages, think_messages
-from .state import WorkflowState, WorkflowStep, merge_token_usage
+from ..chat.chat_model import BaseChatModel, Response
+from .prompts import tool_back_message
+from .state import WorkflowState, WorkflowStep
 
-DEFAULT_WORKFLOW_PROMPT = "You are the chat assistant for Eco_RAG."
-
-
-class RouteDecision(TypedDict):
-    """Store one simple workflow route decision."""
-
-    next_step: str
-    reason: str
-
-
-class RetrieveDecision(RouteDecision, total=False):
-    """Store the retrieve decision plus an optional tool request."""
-
-    tool_name: str | None
-    tool_args: dict[str, Any]
-
-
-class ThinkDecision(RouteDecision):
-    """Store the think-node reflection payload."""
-
-    conclusion: str
-    update_plan: str
-    self_reflection: str
+SECTION_PATTERN = re.compile(r"(?ms)^\[([a-z_]+)\]\s*(.*?)(?=^\[[a-z_]+\]\s*|\Z)")
 
 
 @dataclass(frozen=True)
@@ -42,199 +21,141 @@ class WorkflowDependencies:
 
     model: BaseChatModel
     retrieve_tools: tuple[BaseTool, ...] = ()
-    skills_prompt: str = ""
-    system_prompt: str = DEFAULT_WORKFLOW_PROMPT
-    max_retrieve_count: int = 2
-    max_skill_loads: int = 1
+    max_retrieve_rounds: int = 2
 
 
 async def plan_node(state: WorkflowState, deps: WorkflowDependencies) -> WorkflowState:
-    """Choose the first workflow action."""
-    payload, usage, output = await _json_response(
-        deps.model,
-        plan_messages(
-            state["query"],
-            state["context"],
-            bool(deps.retrieve_tools),
-            state.get("requested_skill"),
-        ),
-    )
-    decision = _plan_decision(
-        payload,
+    """Choose whether to answer now or enter retrieval."""
+    response = await deps.model.generate_response(_workflow_messages(state))
+    decision = _decision_from_response(
+        response,
+        node=WorkflowStep.PLAN.value,
+        allow_retrieve=bool(deps.retrieve_tools),
+        allowed_tool_names={tool.name for tool in deps.retrieve_tools},
         requested_skill=state.get("requested_skill"),
-        retrieval_enabled=bool(deps.retrieve_tools),
+    )
+    content = (response.content or "").strip()
+    _emit_record(
+        {
+            "role": "assistant",
+            "content": content,
+            "message_type": WorkflowStep.PLAN.value,
+            "workflow_turn_id": state["workflow_turn_id"],
+            "token_usage": response.token_usage,
+        }
     )
     return {
         **state,
         "next_step": decision["next_step"],
-        "token_usage": merge_token_usage(state["token_usage"], usage),
-        "last_node": WorkflowStep.PLAN.value,
-        "last_detail": _route_detail(decision),
-        "trace": _append_trace(
-            state,
-            {
-                "node": WorkflowStep.PLAN.value,
-                "output": output,
-                "decision": dict(decision),
-            },
-        ),
+        "pending_retrieve": decision.get("pending_retrieve"),
+        "prepared_answer": decision.get("answer", ""),
+        "workflow_memory": _append_memory(state["workflow_memory"], {"role": "assistant", "content": content}),
     }
 
 
-async def inject_skills_node(state: WorkflowState, deps: WorkflowDependencies) -> WorkflowState:
-    """Inject the skill catalog and any explicit /skill request before retrieval."""
-    loaded_skills = list(state["loaded_skills"])
-    requested_skill = state.get("requested_skill")
-    detail = "Injected skills catalog before retrieval."
-
-    if requested_skill:
-        skill_name, content = load_skill_document(requested_skill)
-        loaded_skills = _merge_loaded_skills(loaded_skills, [{"name": skill_name, "content": content}])
-        detail = f"Injected skills catalog and preloaded requested skill '{skill_name}'."
-
+async def retrieve_node(state: WorkflowState) -> WorkflowState:
+    """Validate the pending retrieval command before tool execution."""
+    pending_retrieve = state.get("pending_retrieve")
+    if not isinstance(pending_retrieve, dict):
+        raise ValueError("Retrieve node requires a pending retrieval command.")
     return {
         **state,
-        "skills_prompt": deps.skills_prompt,
-        "loaded_skills": loaded_skills,
-        "last_node": WorkflowStep.INJECT_SKILLS.value,
-        "last_detail": detail,
+        "next_step": WorkflowStep.TOOL.value,
     }
 
 
-async def retrieve_node(state: WorkflowState, deps: WorkflowDependencies) -> WorkflowState:
-    """Let the model choose one tool action, then update retrieval state."""
-    if not deps.retrieve_tools:
-        raise ValueError("Retrieve node requires at least one tool.")
+async def tool_node(state: WorkflowState, deps: WorkflowDependencies) -> WorkflowState:
+    """Execute one pending retrieval command and store the normalized result."""
+    pending_retrieve = state.get("pending_retrieve")
+    if not isinstance(pending_retrieve, dict):
+        raise ValueError("Tool node requires a pending retrieval command.")
 
-    payload, usage, output = await _json_response(
-        deps.model,
-        retrieve_messages(
-            state["query"],
-            state["context"],
-            state["context_items"],
-            state["skills_prompt"] or deps.skills_prompt,
-            state["loaded_skills"],
-            [tool.name for tool in deps.retrieve_tools],
-            state.get("requested_skill"),
-            state["skill_load_count"] < deps.max_skill_loads,
-        ),
+    tool_name = str(pending_retrieve.get("name") or "").strip()
+    tool_args = dict(pending_retrieve.get("args") or {})
+    result = await _run_tool(deps.retrieve_tools, tool_name, tool_args)
+    tool_content = _format_tool_message(tool_name, tool_args, result)
+
+    _emit_record(
+        {
+            "role": "tool",
+            "content": tool_content,
+            "message_type": WorkflowStep.TOOL.value,
+            "workflow_turn_id": state["workflow_turn_id"],
+            "tool_name": tool_name,
+        }
     )
-    decision = _retrieve_decision(payload, {tool.name for tool in deps.retrieve_tools})
-    next_step = decision["next_step"]
-    reason = decision["reason"]
-    loaded_skills = list(state["loaded_skills"])
-    context_items = list(state["context_items"])
-    skill_load_count = state["skill_load_count"]
-    tool_result: dict[str, Any] | None = None
 
-    if decision.get("tool_name"):
-        tool_name = str(decision["tool_name"])
-        tool_args = dict(decision.get("tool_args") or {})
-        if tool_name == "load_skill" and skill_load_count >= deps.max_skill_loads:
-            next_step = WorkflowStep.THINK.value
-            reason = f"{reason} Skill loading limit reached, so retrieval will continue without another skill load."
-        else:
-            tool_result = await _run_tool(deps.retrieve_tools, tool_name, tool_args)
-            loaded_skills = _merge_loaded_skills(loaded_skills, _loaded_skills_from_tool(tool_result))
-            context_items = _merge_context_items(context_items, _context_items_from_tool(tool_result))
-            if tool_name == "load_skill":
-                skill_load_count += 1
-                next_step = WorkflowStep.RETRIEVE.value
-            else:
-                next_step = WorkflowStep.THINK.value
-
-    detail = _retrieve_detail(decision, next_step, reason, tool_result)
-    retrieve_increment = 0 if next_step == WorkflowStep.RETRIEVE.value else 1
+    next_round = state["retrieve_round"] + 1
     return {
         **state,
-        "loaded_skills": loaded_skills,
-        "context_items": context_items,
-        "next_step": next_step,
-        "retrieve_count": state["retrieve_count"] + retrieve_increment,
-        "skill_load_count": skill_load_count,
-        "token_usage": merge_token_usage(state["token_usage"], usage),
-        "last_node": WorkflowStep.RETRIEVE.value,
-        "last_detail": detail,
-        "trace": _append_trace(
-            state,
-            {
-                "node": WorkflowStep.RETRIEVE.value,
-                "output": output,
-                "decision": {
-                    **dict(decision),
-                    "next_step": next_step,
-                    "reason": reason,
-                },
-                "tool_result": _summarize_tool_result(tool_result),
-            },
+        "next_step": WorkflowStep.THINK.value,
+        "retrieve_round": next_round,
+        "pending_retrieve": None,
+        "workflow_memory": _append_memory(
+            state["workflow_memory"],
+            # Use provider-safe flat transcript roles while keeping the raw tool payload intact.
+            {"role": "user", "content": tool_content},
+            tool_back_message(
+                allow_retrieve=bool(deps.retrieve_tools) and next_round < deps.max_retrieve_rounds,
+                available_tools=[tool.name for tool in deps.retrieve_tools],
+            ),
         ),
     }
 
 
 async def think_node(state: WorkflowState, deps: WorkflowDependencies) -> WorkflowState:
-    """Reflect on the current evidence and decide whether to retrieve more or answer."""
-    allow_retrieve = bool(deps.retrieve_tools) and state["retrieve_count"] < deps.max_retrieve_count
-    payload, usage, output = await _json_response(
-        deps.model,
-        think_messages(
-            state["query"],
-            state["context"],
-            state["context_items"],
-            allow_retrieve,
-        ),
+    """Reflect on the accumulated transcript and decide whether to retrieve or answer."""
+    allow_retrieve = bool(deps.retrieve_tools) and state["retrieve_round"] < deps.max_retrieve_rounds
+    response = await deps.model.generate_response(_workflow_messages(state))
+    decision = _decision_from_response(
+        response,
+        node=WorkflowStep.THINK.value,
+        allow_retrieve=allow_retrieve,
+        allowed_tool_names={tool.name for tool in deps.retrieve_tools},
     )
-    decision = _think_decision(payload, allow_retrieve=allow_retrieve)
+    content = (response.content or "").strip()
+    _emit_record(
+        {
+            "role": "assistant",
+            "content": content,
+            "message_type": WorkflowStep.THINK.value,
+            "workflow_turn_id": state["workflow_turn_id"],
+            "token_usage": response.token_usage,
+        }
+    )
     return {
         **state,
         "next_step": decision["next_step"],
-        "token_usage": merge_token_usage(state["token_usage"], usage),
-        "last_node": WorkflowStep.THINK.value,
-        "last_detail": _think_detail(decision),
-        "trace": _append_trace(
-            state,
-            {
-                "node": WorkflowStep.THINK.value,
-                "output": output,
-                "decision": dict(decision),
-            },
-        ),
+        "pending_retrieve": decision.get("pending_retrieve"),
+        "prepared_answer": decision.get("answer", ""),
+        "workflow_memory": _append_memory(state["workflow_memory"], {"role": "assistant", "content": content}),
     }
 
 
-def answer_node_messages(state: WorkflowState, deps: WorkflowDependencies) -> list[dict[str, str]]:
-    """Build the final answer prompt payload."""
-    return answer_messages(
-        state["query"],
-        state["context"],
-        state["context_items"],
-        deps.system_prompt,
-    )
-
-
-def finalize_answer_state(
-    state: WorkflowState,
-    content: str,
-    token_usage: dict[str, Any] | None,
-) -> WorkflowState:
-    """Finalize the workflow after the streamed answer is complete."""
-    answer = content.strip()
-    if not answer:
-        raise ValueError("Answer node returned an empty reply.")
+async def answer_node(state: WorkflowState) -> WorkflowState:
+    """Emit the prepared answer without another model call."""
+    answer = _required_block(state.get("prepared_answer"), "answer")
+    writer = get_stream_writer()
+    writer({"event": "chunk", "data": {"delta": answer, "content": answer}})
     return {
         **state,
-        "answer": answer,
         "next_step": None,
-        "token_usage": merge_token_usage(state["token_usage"], token_usage),
-        "last_node": WorkflowStep.ANSWER.value,
-        "last_detail": "Generated final answer.",
-        "trace": _append_trace(
-            state,
-            {
-                "node": WorkflowStep.ANSWER.value,
-                "output": answer,
-            },
-        ),
+        "prepared_answer": answer,
     }
+
+
+def route_from_state(state: WorkflowState) -> str:
+    """Start or resume the workflow from the saved next step."""
+    return _next_step(
+        state,
+        {
+            WorkflowStep.PLAN.value,
+            WorkflowStep.RETRIEVE.value,
+            WorkflowStep.TOOL.value,
+            WorkflowStep.THINK.value,
+            WorkflowStep.ANSWER.value,
+        },
+    )
 
 
 def route_after_plan(state: WorkflowState) -> str:
@@ -242,9 +163,14 @@ def route_after_plan(state: WorkflowState) -> str:
     return _next_step(state, {WorkflowStep.RETRIEVE.value, WorkflowStep.ANSWER.value})
 
 
-def route_after_retrieve(state: WorkflowState) -> str:
-    """Read the next node after retrieve."""
-    return _next_step(state, {WorkflowStep.RETRIEVE.value, WorkflowStep.THINK.value})
+def route_after_retrieve(_state: WorkflowState) -> str:
+    """Retrieve always transitions into tool execution."""
+    return WorkflowStep.TOOL.value
+
+
+def route_after_tool(_state: WorkflowState) -> str:
+    """Tool execution always transitions into think."""
+    return WorkflowStep.THINK.value
 
 
 def route_after_think(state: WorkflowState) -> str:
@@ -252,79 +178,65 @@ def route_after_think(state: WorkflowState) -> str:
     return _next_step(state, {WorkflowStep.RETRIEVE.value, WorkflowStep.ANSWER.value})
 
 
-async def _json_response(
-    model: BaseChatModel,
-    messages: list[dict[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any] | None, str]:
-    """Call the model once and parse the first JSON object from its response."""
-    response = await model.generate_response(messages)
-    output = (response.content or "").strip()
-    return _json_object(output), response.token_usage, output
+def _workflow_messages(state: WorkflowState) -> list[dict[str, str]]:
+    """Build the provider payload from the flat workflow transcript."""
+    return [{"role": item["role"], "content": item["content"]} for item in state["workflow_memory"]]
 
 
-def _plan_decision(
-    payload: dict[str, Any],
+def _append_memory(
+    workflow_memory: list[dict[str, str]],
+    *items: dict[str, str],
+) -> list[dict[str, str]]:
+    """Append new flat-memory items while keeping only role/content pairs."""
+    next_memory = [{"role": item["role"], "content": item["content"]} for item in workflow_memory]
+    for item in items:
+        role = str(item.get("role") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if role not in {"system", "user", "assistant"} or not content:
+            continue
+        next_memory.append({"role": role, "content": content})
+    return next_memory
+
+
+def _decision_from_response(
+    response: Response,
     *,
-    requested_skill: str | None,
-    retrieval_enabled: bool,
-) -> RouteDecision:
-    """Validate the planner decision."""
-    allowed = {WorkflowStep.ANSWER.value}
-    if retrieval_enabled:
-        allowed.add(WorkflowStep.RETRIEVE.value)
-    decision = _route_decision(payload, allowed)
+    node: str,
+    allow_retrieve: bool,
+    allowed_tool_names: set[str],
+    requested_skill: str | None = None,
+) -> dict[str, Any]:
+    """Parse one decision-node response."""
+    if response.tool_calls:
+        raise ValueError(f"{node.title()} node must not use provider-native tool calls.")
+
+    sections = _sections(response.content)
+    _required_text(sections.get(node), node)
+    next_step = _required_text(sections.get("next"), "next").lower()
+
     if requested_skill:
-        decision["next_step"] = WorkflowStep.RETRIEVE.value
-    return decision
+        return {
+            "next_step": WorkflowStep.RETRIEVE.value,
+            "pending_retrieve": {"name": "load_skill", "args": {"skill_name": requested_skill}},
+        }
 
+    if next_step == WorkflowStep.ANSWER.value:
+        return {
+            "next_step": WorkflowStep.ANSWER.value,
+            "answer": _required_block(sections.get("answer"), "answer"),
+        }
 
-def _retrieve_decision(payload: dict[str, Any], tool_names: set[str]) -> RetrieveDecision:
-    """Validate one retrieve-node tool decision."""
-    decision: RetrieveDecision = {
-        **_route_decision(payload, {WorkflowStep.RETRIEVE.value, WorkflowStep.THINK.value}),
-        "tool_name": _optional_text(payload.get("tool_name")),
-        "tool_args": _object(payload.get("tool_args")),
-    }
-    tool_name = decision.get("tool_name")
-    if tool_name is None:
-        decision["next_step"] = WorkflowStep.THINK.value
-        return decision
-    if tool_name not in tool_names:
-        allowed = ", ".join(sorted(tool_names))
-        raise ValueError(f"Retrieve node requested unknown tool '{tool_name}'. Allowed tools: {allowed}.")
-    if tool_name == "load_skill":
-        decision["next_step"] = WorkflowStep.RETRIEVE.value
-    else:
-        decision["next_step"] = WorkflowStep.THINK.value
-    return decision
+    if next_step != WorkflowStep.RETRIEVE.value:
+        raise ValueError(f"{node.title()} node returned invalid next step '{next_step}'.")
+    if not allow_retrieve:
+        raise ValueError(f"{node.title()} node cannot request more retrieval.")
 
-
-def _think_decision(payload: dict[str, Any], *, allow_retrieve: bool) -> ThinkDecision:
-    """Validate the think-node reflection payload."""
-    allowed = {WorkflowStep.ANSWER.value}
-    if allow_retrieve:
-        allowed.add(WorkflowStep.RETRIEVE.value)
-    decision: ThinkDecision = {
-        **_route_decision(payload, allowed),
-        "conclusion": _required_text(payload, "conclusion"),
-        "update_plan": _required_text(payload, "update_plan"),
-        "self_reflection": _required_text(payload, "self_reflection"),
-    }
-    if not allow_retrieve and decision["next_step"] == WorkflowStep.RETRIEVE.value:
-        decision["next_step"] = WorkflowStep.ANSWER.value
-        decision["reason"] = f"{decision['reason']} Retrieval budget is exhausted."
-    return decision
-
-
-def _route_decision(payload: dict[str, Any], allowed_next_steps: set[str]) -> RouteDecision:
-    """Validate a simple next-step decision."""
-    next_step = _required_text(payload, "next_step").lower()
-    if next_step not in allowed_next_steps:
-        allowed = ", ".join(sorted(allowed_next_steps))
-        raise ValueError(f"Workflow node returned invalid next_step '{next_step}'. Allowed: {allowed}.")
     return {
-        "next_step": next_step,
-        "reason": _required_text(payload, "reason"),
+        "next_step": WorkflowStep.RETRIEVE.value,
+        "pending_retrieve": _parse_retrieve_call(
+            _required_block(sections.get("retrieve"), "retrieve"),
+            allowed_tool_names,
+        ),
     }
 
 
@@ -333,7 +245,7 @@ async def _run_tool(
     tool_name: str,
     tool_args: dict[str, Any],
 ) -> dict[str, Any]:
-    """Execute one workflow tool and normalize exceptions into tool payloads."""
+    """Execute one workflow tool and normalize exceptions into a stable payload."""
     tool = next((item for item in tools if item.name == tool_name), None)
     if tool is None:
         raise ValueError(f"Workflow tool '{tool_name}' is not configured.")
@@ -341,207 +253,166 @@ async def _run_tool(
         result = await tool.ainvoke(tool_args)
     except Exception as exc:
         result = {
-            "type": "error",
+            "type": "context",
             "skill_name": tool_name,
             "items": [],
             "error": str(exc),
         }
-    return result if isinstance(result, dict) else {"type": "context", "skill_name": tool_name, "items": [{"content": str(result)}]}
+    if isinstance(result, dict):
+        return result
+    return {"type": "context", "skill_name": tool_name, "items": [{"content": str(result)}]}
 
 
-def _context_items_from_tool(result: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """Read context items from a tool result."""
-    if not isinstance(result, dict) or result.get("type") != "context":
-        return []
+def _parse_retrieve_call(text: str, allowed_tool_names: set[str]) -> dict[str, Any]:
+    """Parse one safe retrieval command from the bracketed retrieve block."""
+    try:
+        expression = ast.parse(_strip_code_fences(text).strip(), mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(f"Invalid retrieve command: {text}") from exc
+
+    call = expression.body
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        raise ValueError("Retrieve command must be a simple function call.")
+    tool_name = call.func.id.strip()
+    if tool_name not in allowed_tool_names:
+        allowed = ", ".join(sorted(allowed_tool_names))
+        raise ValueError(f"Unknown retrieve tool '{tool_name}'. Allowed tools: {allowed}.")
+
+    args = [_literal_value(node) for node in call.args]
+    kwargs = {item.arg: _literal_value(item.value) for item in call.keywords if item.arg}
+
+    if tool_name == "load_skill":
+        skill_name = kwargs.get("skill_name", args[0] if args else None)
+        if not isinstance(skill_name, str) or not skill_name.strip():
+            raise ValueError("load_skill requires one non-empty skill name.")
+        return {"name": tool_name, "args": {"skill_name": skill_name.strip()}}
+
+    if tool_name in {"database_search", "legacy_search"}:
+        query = kwargs.get("query", args[0] if args else None)
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError(f"{tool_name} requires one non-empty query string.")
+        payload = {"query": query.strip()}
+        if tool_name == "database_search":
+            top_k = kwargs.get("top_k")
+            if isinstance(top_k, int) and not isinstance(top_k, bool):
+                payload["top_k"] = top_k
+        return {"name": tool_name, "args": payload}
+
+    if tool_name == "web_search":
+        queries = kwargs.get("queries")
+        if queries is None:
+            if "query" in kwargs:
+                queries = [kwargs["query"]]
+            elif args:
+                queries = args
+        if not isinstance(queries, list) or not queries:
+            raise ValueError("web_search requires one or more query strings.")
+        cleaned = [item.strip() for item in queries if isinstance(item, str) and item.strip()]
+        if not cleaned:
+            raise ValueError("web_search requires one or more query strings.")
+        payload: dict[str, Any] = {"query": cleaned[0]} if len(cleaned) == 1 else {"queries": cleaned}
+        max_results = kwargs.get("max_results")
+        if isinstance(max_results, int) and not isinstance(max_results, bool):
+            payload["max_results"] = max_results
+        return {"name": tool_name, "args": payload}
+
+    raise ValueError(f"Retrieve tool '{tool_name}' is not supported by the parser.")
+
+
+def _literal_value(node: ast.AST) -> Any:
+    """Read a restricted literal subset from one AST node."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (str, int, float, bool)) or node.value is None:
+            return node.value
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return [_literal_value(item) for item in node.elts]
+    raise ValueError("Retrieve commands may only use simple literal arguments.")
+
+
+def _format_tool_message(tool_name: str, tool_args: dict[str, Any], result: dict[str, Any]) -> str:
+    """Render one readable tool message for persisted history."""
+    heading = f"[tool]\n{tool_name}({', '.join(f'{key}={value!r}' for key, value in tool_args.items())})"
+    error = _optional_text(result.get("error"))
+    if error:
+        return f"{heading}\n\nError: {error}"
+
+    if result.get("type") == "skill":
+        content = str(result.get("content") or "").strip()
+        skill_name = _optional_text(result.get("skill_name")) or tool_name
+        return f"{heading}\n\nLoaded skill: {skill_name}\n\n{content}"
+
     items = result.get("items")
-    if not isinstance(items, list):
-        return []
-    normalized: list[dict[str, Any]] = []
-    for item in items:
+    if not isinstance(items, list) or not items:
+        return f"{heading}\n\nNo results."
+
+    parts = []
+    for index, item in enumerate(items, start=1):
         if hasattr(item, "model_dump"):
             item = item.model_dump()
         if not isinstance(item, dict):
             item = {"content": str(item)}
-        content = " ".join(str(item.get("content", item.get("document", ""))).split())
-        if not content:
-            continue
-        normalized.append(
-            {
-                "title": str(item.get("title", "")).strip(),
-                "content": content,
-                "url": _optional_text(item.get("url")),
-                "file_path": _optional_text(item.get("file_path")),
-                "source_type": _optional_text(item.get("source_type")),
-                "skill_name": _optional_text(result.get("skill_name")),
-                "distance": item.get("distance") if isinstance(item.get("distance"), (int, float)) else None,
-            }
-        )
-    return normalized
+        title = str(item.get("title", "")).strip()
+        content = str(item.get("content", item.get("document", "")) or "").strip()
+        line = f"{index}. {title}" if title else f"{index}."
+        if item.get("url"):
+            line = f"{line}\nURL: {item['url']}"
+        if content:
+            line = f"{line}\n{content}"
+        parts.append(line.strip())
+    return f"{heading}\n\n" + "\n\n".join(parts)
 
 
-def _loaded_skills_from_tool(result: dict[str, Any] | None) -> list[dict[str, str]]:
-    """Read skill documents from a tool result."""
-    if not isinstance(result, dict) or result.get("type") != "skill":
-        return []
-    name = _optional_text(result.get("skill_name"))
-    content = _optional_text(result.get("content"))
-    if not name or not content:
-        return []
-    return [{"name": name, "content": content}]
-
-
-def _merge_context_items(existing: list[dict[str, Any]], new_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge context items without duplicating the same content."""
-    merged = [dict(item) for item in existing]
-    seen = {
-        (
-            str(item.get("title", "")),
-            str(item.get("content", "")),
-            str(item.get("url", "")),
-            str(item.get("file_path", "")),
-        )
-        for item in merged
-    }
-    for item in new_items:
-        key = (
-            str(item.get("title", "")),
-            str(item.get("content", "")),
-            str(item.get("url", "")),
-            str(item.get("file_path", "")),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(dict(item))
-    return merged
-
-
-def _merge_loaded_skills(existing: list[dict[str, Any]], new_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge loaded skill documents by normalized name."""
-    merged = [dict(item) for item in existing]
-    index = {str(item.get("name", "")).strip().lower(): position for position, item in enumerate(merged)}
-    for item in new_items:
-        name = str(item.get("name", "")).strip()
-        content = str(item.get("content", "")).strip()
-        if not name or not content:
-            continue
-        key = name.lower()
-        payload = {"name": name, "content": content}
-        if key in index:
-            merged[index[key]] = payload
-        else:
-            index[key] = len(merged)
-            merged.append(payload)
-    return merged
-
-
-def _append_trace(state: WorkflowState, entry: dict[str, Any]) -> list[dict[str, Any]]:
-    """Append one workflow trace item."""
-    trace = [dict(item) for item in state.get("trace", [])]
-    trace.append(entry)
-    return trace
-
-
-def _route_detail(decision: RouteDecision) -> str:
-    """Build one route detail string for tracker logs."""
-    return f"Selected '{decision['next_step']}'. {decision['reason']}"
-
-
-def _retrieve_detail(
-    decision: RetrieveDecision,
-    next_step: str,
-    reason: str,
-    tool_result: dict[str, Any] | None,
-) -> str:
-    """Build the retrieve detail string for tracker logs."""
-    tool_name = decision.get("tool_name")
-    if not tool_name:
-        return f"Skipped tool execution and selected '{next_step}'. {reason}"
-    summary = _summarize_tool_result(tool_result)
-    if summary.get("error"):
-        return f"Called '{tool_name}' and selected '{next_step}'. {reason} Tool error: {summary['error']}"
-    extra = []
-    if summary.get("skill_name"):
-        extra.append(f"skill={summary['skill_name']}")
-    if summary.get("count") is not None:
-        extra.append(f"count={summary['count']}")
-    suffix = f" ({', '.join(extra)})" if extra else ""
-    return f"Called '{tool_name}' and selected '{next_step}'. {reason}{suffix}"
-
-
-def _think_detail(decision: ThinkDecision) -> str:
-    """Build the think detail string for tracker logs."""
-    return (
-        f"Selected '{decision['next_step']}'. "
-        f"Conclusion: {decision['conclusion']} "
-        f"Plan: {decision['update_plan']} "
-        f"Reflection: {decision['self_reflection']}"
-    )
-
-
-def _summarize_tool_result(result: dict[str, Any] | None) -> dict[str, Any]:
-    """Build a compact tool-result summary for workflow trace persistence."""
-    if not isinstance(result, dict):
-        return {}
-    count = result.get("count")
-    if not isinstance(count, int):
-        items = result.get("items")
-        count = len(items) if isinstance(items, list) else None
-    return {
-        "type": _optional_text(result.get("type")),
-        "skill_name": _optional_text(result.get("skill_name")),
-        "count": count,
-        "error": _optional_text(result.get("error")),
-    }
+def _emit_record(record: dict[str, Any]):
+    """Emit one buffered persisted record into the LangGraph custom stream."""
+    writer = get_stream_writer()
+    writer({"event": "record", "data": record})
 
 
 def _next_step(state: WorkflowState, allowed: set[str]) -> str:
-    """Read and validate the next step."""
-    next_step = state["next_step"]
+    """Read and validate the next step from state."""
+    next_step = state.get("next_step")
     if next_step not in allowed:
         joined = ", ".join(sorted(allowed))
-        raise ValueError(f"Workflow next_step '{next_step}' is invalid. Allowed: {joined}.")
-    return next_step
+        raise ValueError(f"Workflow next step '{next_step}' is invalid. Allowed: {joined}.")
+    return str(next_step)
 
 
-def _json_object(content: str | None) -> dict[str, Any]:
-    """Parse the first JSON object from model output."""
-    if content is None:
-        raise ValueError("Workflow node returned empty content.")
-    content = content.strip()
-    if not content:
-        raise ValueError("Workflow node returned an empty decision.")
-    start = content.find("{")
-    end = content.rfind("}")
-    if start < 0 or end < start:
-        raise ValueError(f"Workflow node did not return JSON: {content}")
-    try:
-        payload = json.loads(content[start : end + 1])
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Workflow node returned invalid JSON: {content}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("Workflow node decision must be a JSON object.")
-    return payload
+def _sections(content: str | None) -> dict[str, str]:
+    """Parse bracketed sections like [plan] or [answer]."""
+    text = _strip_code_fences(content)
+    return {
+        match.group(1).strip().lower(): match.group(2).strip()
+        for match in SECTION_PATTERN.finditer(text)
+    }
 
 
-def _required_text(payload: dict[str, Any], key: str) -> str:
-    """Read one required string field."""
-    value = " ".join(str(payload.get(key, "")).split())
-    if not value:
-        raise ValueError(f"Workflow node decision is missing '{key}'.")
-    return value
+def _strip_code_fences(content: str | None) -> str:
+    """Remove one outer markdown code fence when present."""
+    text = (content or "").strip()
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 3:
+            return "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _required_text(value: Any, label: str) -> str:
+    """Read one required string-like value."""
+    text = " ".join(str(value or "").split())
+    if not text:
+        raise ValueError(f"Workflow node is missing '{label}'.")
+    return text
+
+
+def _required_block(value: Any, label: str) -> str:
+    """Read one required multi-line text block without flattening it."""
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"Workflow node is missing '{label}'.")
+    return text
 
 
 def _optional_text(value: Any) -> str | None:
     """Normalize optional string-like values."""
     text = " ".join(str(value or "").split())
     return text or None
-
-
-def _object(value: Any) -> dict[str, Any]:
-    """Normalize one optional JSON object."""
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return value
-    raise ValueError("Workflow node field 'tool_args' must be a JSON object.")

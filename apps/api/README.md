@@ -1,36 +1,175 @@
 # API 后端说明
 
-这个目录对应 Eco_RAG 的 FastAPI 后端。后端的职责是把 session、workflow、模型配置和流式响应串成一条稳定的聊天主链路。
+这个目录对应 Eco_RAG 的 FastAPI 后端。
 
-详细 workflow 设计见：
+当前主链路：
+
+`FastAPI Route -> ChatService -> Session / Messages -> WorkflowService -> LangGraph -> Model / Tools`
+
+更细的 workflow 设计见：
 
 - [eco_rag/workflow/README.md](../../eco_rag/workflow/README.md)
 
-接口契约见：
+前后端契约见：
 
 - [apps/Contract.md](../Contract.md)
 
 ## 后端负责什么
 
-- HTTP 与 SSE 路由
-- session / message 持久化
-- `models.json` 读取与保存
-- LangGraph workflow 执行
-- workflow snapshot 实时推送
-- assistant 回复与 token usage 落盘
+- 暴露 HTTP 与 SSE 接口
+- 管理 session / message 持久化
+- 读取与保存 `models.json`
+- 读取与保存 `settings.json`
+- 维护数据库配置 `memory/databases.json`
+- 运行 LangGraph workflow
+- 推送 live workflow 状态和最终答案流
+- 管理指向外部 embedding provider 的配置
 
 ## 应用入口
-
-入口文件：
 
 - [main.py](./app/main.py)
 
 `create_app(...)` 会：
 
+- 确保至少存在一个数据库配置
 - 创建 FastAPI 应用
 - 注入 `ChatService`
-- 注册 session、message、model-settings、meta 路由
+- 注册 session、message、database、model-settings 路由
 - 在前端构建产物存在时挂载 `/ui`
+
+## 当前 workflow 语义
+
+当前节点固定为：
+
+- `plan`
+- `retrieve`
+- `tool`
+- `think`
+- `answer`
+
+关键规则：
+
+- `plan` 和 `think` 是唯一模型决策节点
+- `retrieve` 和 `answer` 是内部控制节点，不持久化聊天回复
+- `tool` 执行 `load_skill` / `database_search` / `web_search`
+- workflow 运行时使用 flat transcript memory，把完整 `plan / tool / think` 串起来
+- workflow 结束后只把真实消息写入 session history，不把 workflow snapshot 挂到 message 上
+
+## RAG 与数据库
+
+当前后端把“向量库”和“embedding 模型”绑定成一对：
+
+- 一个 database 只对应一个 embedding model
+- 一个 database 里的内容只应该由它自己的 embedding model 建库
+- `database_search` 检索时也只使用这个配对模型生成 query embedding
+
+数据库配置保存在：
+
+- `memory/databases.json`
+
+默认推荐的本地 embedding 模型：
+
+- `Qwen/Qwen3-Embedding-0.6B`
+
+模型会下载到：
+
+- `models/Qwen3-Embedding-0.6B`
+
+## Embedding 服务边界
+
+主 API 不托管 embedding 模型，也不提供 `/v1/embeddings`。
+
+当前约定是：
+
+- 所有 embedding model 都被视为外部 OpenAI 兼容 provider
+- `models.json` 是唯一来源，负责保存它们的 `model / api_key / base_url`
+- 主项目只负责数据准备、发请求、保存向量库和检索
+
+如果你要本地部署 Qwen3 embedding 服务，脚本放在：
+
+- [models/qwen3_embedding_service.py](../../models/qwen3_embedding_service.py)
+
+它是独立服务，不由 `apps/api` 托管。
+
+建议把 `models.json` 里的 embedding `base_url` 指向：
+
+- `http://127.0.0.1:8091/v1`
+
+## SSE 事件
+
+前端依赖四种事件：
+
+- `workflow`
+- `chunk`
+- `done`
+- `error`
+
+含义：
+
+- `workflow`：当前 live workflow snapshot
+- `chunk`：最终 `answer` 的增量文本
+- `done`：已持久化的最终 session 状态
+- `error`：终止性错误
+
+## 持久化边界
+
+后端现在显式区分两类数据：
+
+1. 长期聊天历史
+   - 保存在 session messages 中
+   - 会进入下一轮 `build_context()`
+2. 回合内 live workflow 状态
+   - 只通过 SSE `workflow` 和 live draft 管理
+   - 不会持久化到 message 的 `workflow` 字段
+
+一轮消息最终会落盘：
+
+- `system`
+- `user`
+- assistant `plan`
+- zero or more `tool`
+- zero or more assistant `think`
+- assistant `answer`
+
+下一轮上下文只保留同轮最后一条推理消息：
+
+- 优先最后一条 `think`
+- 否则使用 `plan`
+- 不包含 `tool`
+- 不重复包含同轮 `answer`
+
+## Read-only 消息
+
+这些内部消息在 API 上是只读的：
+
+- `message_type == "plan"`
+- `message_type == "think"`
+- `message_type == "tool"`
+
+它们不能：
+
+- edit
+- delete
+- rollback
+- regenerate
+
+普通 `user` / 最终 `answer` 消息仍然允许正常操作。
+
+## 数据库接口
+
+- `GET /api/databases`
+- `POST /api/databases`
+- `PATCH /api/databases/{database_id}`
+- `POST /api/databases/{database_id}/select`
+- `DELETE /api/databases/{database_id}`
+
+返回当前 database 列表、active database，以及每个库的：
+
+- `id`
+- `name`
+- `collection_name`
+- `embedding_model_name`
+- `document_count`
 
 ## 主要接口
 
@@ -47,6 +186,7 @@ Session：
 - `POST /api/sessions`
 - `GET /api/sessions/{session_id}`
 - `PATCH /api/sessions/{session_id}`
+- `PATCH /api/sessions/{session_id}/system-prompt`
 - `DELETE /api/sessions/{session_id}`
 
 聊天与消息：
@@ -57,108 +197,21 @@ Session：
 - `POST /api/sessions/{session_id}/messages/{message_id}/rollback`
 - `POST /api/sessions/{session_id}/messages/{message_id}/regenerate/stream`
 
-## 流式聊天主链路
+数据库：
 
-一次正常聊天的后端调用顺序：
+- `GET /api/databases`
+- `POST /api/databases`
+- `PATCH /api/databases/{database_id}`
+- `POST /api/databases/{database_id}/select`
+- `DELETE /api/databases/{database_id}`
 
-1. 路由接收 `POST /api/sessions/{session_id}/messages/stream`
-2. `ChatService.stream_message(...)` 持久化 user message
-3. `Messages.build_context()` 构造长期聊天上下文
-4. `WorkflowService.stream_chat(...)` 构建并运行 LangGraph workflow
-5. workflow 输出 `workflow` 状态事件和 `chunk` 文本增量
-6. 结束后把 assistant message 和 workflow snapshot 一起写回 session
+## 默认工具
 
-可以简化理解为：
-
-`FastAPI Route -> ChatService -> Sessions / Messages -> WorkflowService -> LangGraph -> Model / Tools`
-
-## 当前 workflow 在后端里的真实形态
-
-当前外层节点固定为：
-
-- `plan`
-- `inject_skills`
-- `retrieve`
-- `think`
-- `answer`
-
-当前边关系为：
-
-- `plan -> answer | inject_skills`
-- `inject_skills -> retrieve`
-- `retrieve -> retrieve | think`
-- `think -> retrieve | answer`
-- `answer -> end`
-
-这意味着：
-
-- `plan` 决定是直接回答还是进入检索
-- `inject_skills` 在 retrieve 之前注入 `skills.md`
-- `retrieve` 由模型输出 JSON 决定是否调用工具
-- `load_skill` 会触发一次 `retrieve -> retrieve`
-- 搜索类工具执行完后统一进入 `think`
-- `think` 再判断是否继续 retrieve 或直接 answer
-
-## SSE 事件
-
-前端依赖的 SSE 事件有四种：
-
-- `workflow`
-- `chunk`
-- `done`
-- `error`
-
-其中：
-
-- `workflow` 是完整 workflow snapshot
-- `chunk` 是 answer 节点的增量输出
-- `done` 是已持久化的最终聊天结果
-- `error` 是终止性异常
-
-## 持久化语义
-
-后端现在区分两类数据：
-
-1. 长期聊天上下文
-   - 来自 session 中的 `messages`
-   - 会进入后续回合的 `build_context()`
-2. workflow 过程数据
-   - 来自 assistant message 的 `workflow` 字段
-   - 包括 `trace`、`context_items`、`loaded_skills`、节点状态、日志、错误等
-   - 会持久化给 UI 回放，但不会重新喂给下一轮模型
-
-这个边界是当前后端设计里最重要的约束之一。
-
-## 后端模块划分
-
-Route Layer：
-
-- [main.py](./app/main.py)
-
-Chat Layer：
-
-- [context_manager.py](../../eco_rag/chat/context_manager.py)
-- [service.py](../../eco_rag/chat/service.py)
-- [registry.py](../../eco_rag/chat/registry.py)
-- [chat_model.py](../../eco_rag/chat/chat_model.py)
-
-Workflow Layer：
-
-- [service.py](../../eco_rag/workflow/service.py)
-- [graph.py](../../eco_rag/workflow/graph.py)
-- [nodes.py](../../eco_rag/workflow/nodes.py)
-- [prompts.py](../../eco_rag/workflow/prompts.py)
-- [tracker.py](../../eco_rag/workflow/tracker.py)
-- [state.py](../../eco_rag/workflow/state.py)
-
-Tools / Skills：
+retrieve tools 定义在：
 
 - [eco_rag/tools](../../eco_rag/tools)
-- [eco_rag/skills](../../eco_rag/skills)
 
-## 当前默认工具
-
-retrieve 默认注册：
+默认包含：
 
 - `load_skill`
 - `database_search`
@@ -167,6 +220,4 @@ retrieve 默认注册：
 兼容层：
 
 - `legacy_search`
-  - 只有 `WorkflowService(tool_runner=...)` 被传入旧式检索函数时才会出现
-
-其中 `web_search` 已经改成解析 DuckDuckGo HTML 搜索结果页，而不是使用几乎拿不到普通搜索结果的 Instant Answer API。
+  - 只在 `WorkflowService(tool_runner=...)` 被提供时出现

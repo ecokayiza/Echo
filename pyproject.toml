@@ -11,7 +11,6 @@ requires-python = ">=3.12"
 dependencies = [
     "chromadb",
     "fastapi",
-    "huggingface_hub",
     "langgraph",
     "langchain-text-splitters",
     "openai",

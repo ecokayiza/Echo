@@ -538,6 +538,88 @@ textarea:focus-visible,
   color: var(--danger);
 }
 
+.database-list {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.database-list--modal {
+  margin-top: 1rem;
+}
+
+.database-list__item {
+  min-width: 0;
+}
+
+.database-card {
+  width: 100%;
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.62rem 0.7rem;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.database-card:hover {
+  background: var(--panel-soft);
+  border-color: #cfd8e6;
+  transform: translateY(-1px);
+}
+
+.database-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+  transform: none;
+}
+
+.database-card--active {
+  background: rgba(227, 237, 255, 0.9);
+  border-color: #bfd4fb;
+}
+
+.database-card--modal {
+  cursor: default;
+}
+
+.database-card--modal .session-action__button {
+  opacity: 0.88;
+  pointer-events: auto;
+}
+
+.database-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.database-card__title {
+  min-width: 0;
+  font-size: 0.92rem;
+  font-weight: 650;
+}
+
+.database-card__meta,
+.database-card__count {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.database-settings-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
 .chat-header {
   padding: 0.65rem 0.85rem 0.22rem;
   display: flex;

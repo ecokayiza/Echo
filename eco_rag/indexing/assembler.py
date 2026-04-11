@@ -1,7 +1,9 @@
 import os
 
+from ..chat.registry import normalize_embedding_model_settings
 from ..config import Config
 from ..domain.schema import RAGRecord, RAGMetadata, ExtraAttributes
+from .database_registry import DatabaseSettings, resolve_database_embedding_settings
 
 # This is the interface for outer files
 # provide APIs to finish one whole process like:
@@ -13,11 +15,12 @@ from ..domain.schema import RAGRecord, RAGMetadata, ExtraAttributes
 # === Handles file process and interaction with vector DB ===
 class Assembler:
     # === Components ===
-    def __init__(self, vector_db, data_loader, chunker, embedder):
+    def __init__(self, vector_db, data_loader, chunker, embedder, *, database: DatabaseSettings | None = None):
         self.db = vector_db
         self.data_loader = data_loader
         self.chunker = chunker
         self.embedder = embedder
+        self.database = database
     
     def store_file(self, filepath):
         """
@@ -69,7 +72,11 @@ class Assembler:
         _, ext = os.path.splitext(file_path)
         data = self.data_loader.load(file_path)
         chunks = self.chunker.chunk(data, ext)
-        embeddings = self.embedder.embed(chunks)
+        embedding_settings = resolve_database_embedding_settings(self.database) if self.database is not None else None
+        embeddings = self.embedder.embed_documents(
+            chunks,
+            normalize_embedding_model_settings(embedding_settings) if embedding_settings is not None else None,
+        )
         
         records = []
         for idx, chunk in enumerate(chunks):

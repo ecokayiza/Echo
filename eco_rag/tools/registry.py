@@ -25,8 +25,6 @@ def build_retrieve_tools(tool_runner: ToolRunner | None = None) -> list[BaseTool
                 "type": "context",
                 "skill_name": "legacy_search",
                 "items": items,
-                "query": " ".join((query or "").strip().split()),
-                "count": len(items),
             }
 
         tools.append(legacy_search)

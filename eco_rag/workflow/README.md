@@ -1,455 +1,318 @@
 # Workflow 说明
 
-这份文档专门解释 Eco_RAG 当前真实生效的 workflow。重点是四件事：
+这份文档描述 Eco_RAG 当前真实生效的 LangGraph workflow。
 
-- 当前 LangGraph 图到底怎么走
-- `skills.md`、skill 文档、tools 是怎么协作的
-- workflow state / trace / snapshot 保存了什么
-- 以后要扩展 skill 或 tool 应该改哪里
+当前设计目标很简单：
 
-## 设计目标
+- 保留 LangGraph 作为流程编排层
+- 让 `plan` 和 `think` 成为唯一的模型决策节点
+- 让 `retrieve` 和 `answer` 成为可显示但不持久化聊天回复的内部节点
+- 让 `tool` 成为统一的技能加载和检索执行节点
+- 让运行中的 workflow 使用一条 flat transcript memory 串起多轮 `plan / tool / think`
+- 保持 state、snapshot、live draft 都尽量精简
 
-这个 workflow 不是传统的固定 RAG。
+## 当前节点
 
-它解决的是一轮聊天里的三个问题：
-
-1. 现在能不能直接回答
-2. 如果不能，应该加载什么 skill 或调用什么工具
-3. 外部动作做完以后，是继续检索还是该结束
-
-所以当前图的核心不是“先检索再回答”，而是“先规划，再按需行动，再反思是否继续行动”。
-
-## 当前图
-
-外层图定义在：
-
-- [graph.py](./graph.py)
-
-当前固定节点：
+固定节点顺序：
 
 1. `plan`
-2. `inject_skills`
-3. `retrieve`
+2. `retrieve`
+3. `tool`
 4. `think`
 5. `answer`
 
-当前边关系：
+固定路由：
 
-- `START -> plan`
-- `plan -> answer`
-- `plan -> inject_skills`
-- `inject_skills -> retrieve`
-- `retrieve -> retrieve`
-- `retrieve -> think`
-- `think -> retrieve`
-- `think -> answer`
+- `START -> plan | retrieve | tool | think | answer`
+  - 用于 fresh run 或 resume
+- `plan -> retrieve | answer`
+- `retrieve -> tool`
+- `tool -> think`
+- `think -> retrieve | answer`
 - `answer -> END`
 
-可以把它理解成两条主路径。
-
-快路径：
-
-```text
-START -> plan -> answer -> END
-```
-
-多跳路径：
-
-```text
-START -> plan -> inject_skills -> retrieve
-retrieve -> retrieve   # 只用于 load_skill 触发的额外一跳
-retrieve -> think
-think -> retrieve      # 继续搜证据，有限次
-think -> answer
-answer -> END
-```
-
-## 节点职责
+## 每个节点的职责
 
 ### `plan`
 
 职责：
 
-- 看 query 和聊天上下文
-- 决定是直接回答还是进入检索
-- 不生成最终答案
+- 读取 flat workflow memory
+- 决定这轮是直接结束还是先进入检索
+- 在同一次回复里同时给出决策和最终答案或检索指令
 
-输出契约：
+输出格式只允许 bracketed text：
 
-```json
-{
-  "next_step": "answer | retrieve",
-  "reason": "..."
-}
+```text
+[plan]
+...
+[next]
+answer
+[answer]
+...
 ```
 
-特殊规则：
+或：
 
-- 如果用户输入了 `/skill name`，`plan` 仍然会走模型，但最终路由会被约束为 `retrieve`
+```text
+[plan]
+...
+[next]
+retrieve
+[retrieve]
+web_search("...")
+```
 
-### `inject_skills`
-
-职责：
-
-- 在进入 retrieve 前把 `eco_rag/skills/skills.md` 注入到状态里
-- 如果用户显式输入了 `/skill name`，在这里直接预加载该 skill 文档
-
-这个节点不调用模型。
-
-它的价值是把两层信息拆开：
-
-- `skills.md` 只放目录和用途摘要
-- 具体 skill 正文按需加载
+`plan` 的输出会作为 assistant message 持久化，`message_type == "plan"`。
 
 ### `retrieve`
 
 职责：
 
-- 让模型决定这一步要不要调用工具
-- 执行至多一个工具动作
-- 把 tool result 写回 workflow state
-- 决定下一步是继续 `retrieve` 还是进入 `think`
+- 不调用模型
+- 只验证上一跳 `plan` 或 `think` 准备好的 `pending_retrieve`
+- 让 workflow 面板里能明确显示“现在进入检索阶段”
 
-这是当前 workflow 的核心节点。
+它是内部控制节点，不会写入聊天历史。
 
-与旧实现的区别：
+### `tool`
 
-- 现在不再保留 retrieve 内部的嵌套 LangGraph 子图
-- 每次 `retrieve` 都对应一次明确的模型输出
-- 工具调用由 `retrieve` 节点自己按 JSON 指令执行
+职责：
 
-输出契约：
+- 执行 `pending_retrieve`
+- 支持 `load_skill(...)`、`database_search(...)`、`web_search(...)`
+- 兼容 `legacy_search(...)`
+- 把完整 tool 结果写入持久化 `tool` message
+- 同时把 tool 结果和 runtime-only `tool_back` prompt 追加到 flat workflow memory
 
-```json
-{
-  "next_step": "retrieve | think",
-  "reason": "...",
-  "tool_name": "load_skill | database_search | web_search | legacy_search | null",
-  "tool_args": {}
-}
-```
+`tool` 会持久化一条 `role == "tool"` 的消息，字段包括：
 
-路由规则是固定的：
-
-- `tool_name == "load_skill"` 时，下一步一定是 `retrieve`
-- 搜索类工具执行完后，下一步一定是 `think`
-- 不调用工具时，也会进入 `think`
+- `message_type == "tool"`
+- `workflow_turn_id`
+- `tool_name`
 
 ### `think`
 
 职责：
 
-- 基于当前 `context_items` 和聊天上下文做一次反思
-- 判断是否还需要再 retrieve 一次
-- 如果证据已经足够，则进入 `answer`
+- 读取已经积累的 flat workflow memory
+- 判断是否继续 `retrieve`
+- 或直接给出最终 `[answer]`
 
-输出契约：
+它和 `plan` 是对称节点，区别只有一个：
 
-```json
-{
-  "next_step": "retrieve | answer",
-  "reason": "...",
-  "conclusion": "...",
-  "update_plan": "...",
-  "self_reflection": "..."
-}
+- `think` 比 `plan` 多看到了前面所有完整 `tool` 结果
+
+输出格式：
+
+```text
+[think]
+...
+[next]
+answer
+[answer]
+...
 ```
 
-这一步明确要求模型给出：
+或：
 
-- 当前结论
-- 下一步计划
-- 自我反思
+```text
+[think]
+...
+[next]
+retrieve
+[retrieve]
+load_skill("database_search")
+```
 
-所以 `think` 不只是“要不要搜”，而是一个可回放的中间决策节点。
+`think` 的输出会作为 assistant message 持久化，`message_type == "think"`。
 
 ### `answer`
 
 职责：
 
-- 使用聊天上下文和 `context_items` 生成最终回复
-- 通过 LangGraph custom stream 向外发送 `chunk`
+- 不再调用模型
+- 只把前一跳已经准备好的 `prepared_answer` 通过 stream 输出
+- 结束 workflow
 
-它不调用工具，只负责最终回答。
+它是内部控制节点，不会额外生成一条内部记录。
 
-## Skills 机制
+最终用户可见的 assistant 回复由 chat 层在 workflow 完成后统一落盘，`message_type == "answer"`。
 
-skill 目录：
+## 当前可用工具
 
-- [eco_rag/skills](../skills)
+工具注册入口：
 
-当前约定：
+- [eco_rag/tools/registry.py](../tools/registry.py)
 
-- `skills.md` 是目录，不是完整手册
-- 目录里列出 skill 名称和大致说明
-- 具体 skill 文档放在 `*.md`
-- skill 正文只在真正需要时加载
-
-默认会出现在 `skills.md` 的能力包括：
-
-- `database_search`
-- `web_search`
-
-虽然它们本身也是“skill”，但默认已经在目录里可见，不需要先猜测名字。
-
-## `/skill name` 的行为
-
-如果用户输入：
-
-```text
-/skill web_search 帮我查一下最新的 LangGraph 教程
-```
-
-workflow 会做这几件事：
-
-1. `new_state()` 解析出 `requested_skill = "web_search"`
-2. `query` 会被清洗成实际问题文本
-3. `plan` 会被强制约束到 `retrieve`
-4. `inject_skills` 会直接预加载 `web_search.md`
-5. 后续 `retrieve` 可以在已加载的 skill 基础上继续决定是否调用工具
-
-也就是说，`/skill` 是显式注入入口，不需要模型先自己猜测该 skill。
-
-## Tools 机制
-
-工具实现目录：
-
-- [eco_rag/tools](../tools)
-
-默认注册逻辑：
-
-- [registry.py](../tools/registry.py)
-
-当前默认工具：
+当前 retrieve tools：
 
 - `load_skill`
 - `database_search`
 - `web_search`
-
-兼容工具：
-
 - `legacy_search`
-  - 仅当 `WorkflowService(tool_runner=...)` 被传入旧式检索函数时才出现
+  - 仅在 `WorkflowService(tool_runner=...)` 被传入旧式检索函数时出现
 
-### `load_skill`
+解析规则在：
 
-实现：
+- [nodes.py](./nodes.py)
 
-- [skill_loader.py](../tools/skill_loader.py)
+retrieve block 只接受安全的简单函数调用，不接受 provider-native tool calls。
 
-返回结构：
+## Prompt 结构
 
-```json
-{
-  "type": "skill",
-  "skill_name": "...",
-  "content": "..."
-}
-```
-
-workflow 会把这类结果写入 `loaded_skills`。
-
-### `database_search`
-
-实现：
-
-- [database_search.py](../tools/database_search.py)
-
-职责：
-
-- 使用 embedding 模型向量化 query
-- 查询本地向量数据库
-- 返回可被 workflow 采纳的 `context_items`
-
-返回结构：
-
-```json
-{
-  "type": "context",
-  "skill_name": "database_search",
-  "items": [...]
-}
-```
-
-### `web_search`
-
-实现：
-
-- [web_search.py](../tools/web_search.py)
-
-当前实现已经修正为：
-
-- 解析 DuckDuckGo HTML 搜索结果页
-- 抽取标题、摘要和 URL
-- 不再使用对普通网页搜索基本不可用的 Instant Answer API
-
-这意味着 `web_search` 现在能真正返回常规网页结果，而不是大多数时候只给空列表。
-
-## Prompt 注入顺序
-
-prompt 由：
+Prompt 组装入口：
 
 - [prompts.py](./prompts.py)
-- [prompt_templates](./prompt_templates)
 
-统一组装。
+模板：
 
-当前顺序是：
+- [prompt_templates/system.yaml](./prompt_templates/system.yaml)
+- [prompt_templates/tool_back.yaml](./prompt_templates/tool_back.yaml)
 
-1. `plan` 看聊天上下文和显式 skill 请求
-2. 如果进入检索，`inject_skills` 先把 `skills.md` 注入状态
-3. `retrieve` 再看到：
-   - query
-   - 会话上下文
-   - `skills.md`
-   - 已加载 skill
-   - 已有 `context_items`
-   - 可用工具列表
-4. `think` 基于当前证据做反思
-5. `answer` 用最终证据回答
+当前约束：
 
-这样做的好处是：
+- session 里只保留一个 system prompt，并始终放在最上面
+- 第一次模型决策走 `plan`，tool 之后的继续决策走 `think`
+- 不允许 provider-native tool calls
+- `tool_back` 只在运行时注入，不会落盘
+- 一个共享的 `prompt_truncate_chars` 控制文本截断
 
-- 避免把所有 skill 正文一次性塞进 prompt
-- 也避免模型完全不知道有哪些 skill
+## Workflow State
 
-## State 结构
-
-状态定义在：
+状态定义：
 
 - [state.py](./state.py)
 
-当前关键字段：
+当前保留的必要字段：
 
+- `workflow_turn_id`
 - `query`
-  - 当前用户问题，已经去掉 `/skill xxx` 命令壳
-- `context`
-  - 当前回合可见的聊天上下文
 - `requested_skill`
-  - 用户显式请求的 skill
 - `next_step`
-  - 下一个节点
-- `retrieve_count`
-  - 实际检索轮次数
-- `skill_load_count`
-  - `load_skill` 额外回路次数
-- `skills_prompt`
-  - 注入后的 `skills.md`
-- `loaded_skills`
-  - 已加载 skill 正文
-- `context_items`
-  - tool 返回的结构化证据
-- `trace`
-  - 每个模型节点的输出记录
-- `answer`
-  - 最终答案
-- `token_usage`
-  - 整轮 workflow 聚合 token
+- `retrieve_round`
+- `pending_retrieve`
+- `prepared_answer`
+- `workflow_memory`
 
-这里最重要的两个计数器：
+设计原则：
 
-- `skill_load_count`
-  - 只控制 `load_skill -> retrieve` 这一类回路，默认只允许一次
-- `retrieve_count`
-  - 控制 `think -> retrieve` 的继续搜证据次数
+- state 服务于“继续往下跑这一轮”
+- 聊天历史服务于“下一轮长期上下文”
+- 不在 tracker 里重复保存完整节点输出
 
-所以“加载 skill”预算和“继续检索”预算是分开的。
+## Snapshot 与 Tracker
 
-## Trace 与 Snapshot
-
-workflow 对 UI 暴露的 snapshot 由：
+tracker 定义：
 
 - [tracker.py](./tracker.py)
 
-生成。
+当前 snapshot 只包含：
 
-当前 snapshot 主要包含：
-
+- `workflow_turn_id`
 - `query`
-- `requested_skill`
-- `loaded_skills`
-- `context_items`
-- `trace`
 - `answer`
-- `token_usage`
 - `status`
 - `active_node`
 - `node_statuses`
 - `logs`
 - `errors`
 
-其中 `trace` 会记录：
+它不再保存：
 
-- `plan` 的 JSON 输出
-- 每次 `retrieve` 的 JSON 输出
-- `retrieve` 的 tool result summary
-- `think` 的 JSON 输出
-- `answer` 的最终文本
+- `trace`
+- `workflow_memory`
+- 重复的节点 payload
 
-这让前端在重新加载历史会话时，不需要重跑 workflow，也能回放本轮过程。
+这些内容的来源已经分开：
 
-## 长期上下文 vs workflow 过程
+- 内部消息记录保存 `plan / tool / think`
+- workflow state 只保留继续执行所需的数据
 
-这是当前设计里最重要的边界。
+## Live Draft 与恢复
 
-长期上下文：
+live draft 定义：
 
-- 来自 `context_manager` 管理的聊天消息
-- 会进入下一轮 `build_context()`
+- [drafts.py](./drafts.py)
 
-workflow 过程：
+规则：
 
-- 来自 assistant message 的 `workflow` 字段
-- 包括 `trace`、`context_items`、`loaded_skills`、日志、错误、节点状态
-- 会落盘，供 UI 加载和回放
-- 不会作为下一轮模型的长期上下文
+- 每个 session 只保留一个 live workflow draft
+- 在这些时刻更新 draft：
+  - `plan` 完成
+  - `retrieve` 接受 pending command
+  - `tool` 完成
+  - `think` 完成
+  - `answer` 完成
+- 恢复时按 `session_id + user_message_id` 匹配
+- 命中同一轮 user message 时，从保存的 `next_step` 继续
+- 命中不同 user message 时，旧 draft 会被清掉
 
-换句话说：
+## 聊天历史与上下文
 
-- chat history 是长期记忆
-- workflow snapshot 是回合内过程记录
+聊天历史由：
 
-## 运行时约束
+- [eco_rag/chat/context_manager.py](../chat/context_manager.py)
 
-默认约束在：
+负责。
 
+当前规则：
+
+- 只有落盘 session history 才是下一轮长期记忆
+- `tool` 消息不会进入下一轮模型上下文
+- 同一 `workflow_turn_id` 只保留一条 assistant 推理消息进入下一轮 context
+  - 优先最后一条 `think`
+  - 否则使用 `plan`
+- 同轮 `answer` 不再进入下一轮 context
+- 进入下一轮 context 的 `plan / think` 会被裁剪为纯 reasoning block，不带 `[next]` / `[retrieve]` / `[answer]`
+
+也就是说，下一轮模型会看到上一轮 assistant 的最终推理结论，但不会直接看到 tool payload，也不会重复看到同轮 answer。
+
+## Session 中实际保存什么
+
+一轮带检索的聊天最终会保存这些消息：
+
+1. user
+2. assistant `plan`
+3. zero or more `tool`
+4. zero or more assistant `think`
+5. assistant `answer`
+
+其中：
+
+- `plan / think / tool` 是只读内部记录
+- `answer` 是正常 assistant 回复
+
+## 配置
+
+运行时配置在根目录：
+
+- [settings.json](../../settings.json)
+
+当前只保留需要的三个字段：
+
+- `max_context_messages`
+- `max_retrieve_rounds`
+- `prompt_truncate_chars`
+
+模型配置仍然在：
+
+- [models.json](../../models.json)
+
+## 主要入口文件
+
+- [graph.py](./graph.py)
 - [nodes.py](./nodes.py)
 - [service.py](./service.py)
+- [tracker.py](./tracker.py)
+- [drafts.py](./drafts.py)
+- [prompts.py](./prompts.py)
 
-当前默认值：
+## 当前实现的核心边界
 
-- `max_retrieve_count = 2`
-- `max_skill_loads = 1`
-
-含义：
-
-- `think -> retrieve` 最多再走两轮
-- `load_skill -> retrieve` 最多额外走一轮
-
-## 如何新增一个 tool
-
-推荐顺序：
-
-1. 在 `eco_rag/tools/` 下新增工具文件
-2. 返回稳定的结构化字典
-3. 在 [registry.py](../tools/registry.py) 注册
-4. 如果模型需要理解该工具的使用时机，再补一个 skill 文档
-5. 在 `skills.md` 加上摘要
-6. 补 workflow 单测
-
-## 如何新增一个 skill
-
-推荐顺序：
-
-1. 在 `eco_rag/skills/` 下新增 `your_skill.md`
-2. 在 `skills.md` 里写一条简短说明
-3. 如果它对应真实动作，确保存在对应 tool
-4. 必要时补 `/skill your_skill ...` 路径测试
-
-## 当前实现的优点
-
-- 每个关键节点都有独立模型输出，易观察、易调试
-- `/skill` 显式注入和模型自主 `load_skill` 同时支持
-- `web_search` 和 `database_search` 都走统一 tool 接口
-- workflow 过程可持久化、可回放，但不会污染长期上下文
-- 结构足够简单，后续继续扩展不会被嵌套子图拖复杂度
+- LangGraph 负责控制流，不负责长期记忆
+- `plan` / `think` 负责决策，不直接执行工具
+- `retrieve` / `answer` 负责阶段控制，不产生持久化聊天回复
+- `tool` 负责执行外部动作，并把结果转成 state 与内部消息
+- session history 是下一轮上下文来源
+- live draft 是中断恢复来源

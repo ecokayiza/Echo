@@ -2,66 +2,62 @@ from __future__ import annotations
 
 from functools import partial
 
-from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph
 
 from .nodes import (
     WorkflowDependencies,
-    answer_node_messages,
-    finalize_answer_state,
-    inject_skills_node,
+    answer_node,
     plan_node,
     retrieve_node,
     route_after_plan,
     route_after_retrieve,
     route_after_think,
+    route_after_tool,
+    route_from_state,
     think_node,
+    tool_node,
 )
 from .state import WorkflowState, WorkflowStep
-
-
-async def _answer_node(state: WorkflowState, deps: WorkflowDependencies):
-    """Run the streaming answer node and emit token deltas through LangGraph."""
-    writer = get_stream_writer()
-    reply_parts: list[str] = []
-    token_usage = None
-
-    def on_usage(usage):
-        nonlocal token_usage
-        if usage is None:
-            return
-        token_usage = dict(usage)
-
-    async for delta in deps.model.stream_response(answer_node_messages(state, deps), callbacks={"on_usage": on_usage}):
-        reply_parts.append(delta)
-        writer({"event": "chunk", "data": {"delta": delta, "content": "".join(reply_parts)}})
-
-    return finalize_answer_state(state, "".join(reply_parts), token_usage)
 
 
 def build_workflow(deps: WorkflowDependencies):
     """Build the LangGraph workflow for one runtime configuration."""
     graph = StateGraph(WorkflowState)
     graph.add_node(WorkflowStep.PLAN.value, partial(plan_node, deps=deps))
-    graph.add_node(WorkflowStep.INJECT_SKILLS.value, partial(inject_skills_node, deps=deps))
-    graph.add_node(WorkflowStep.RETRIEVE.value, partial(retrieve_node, deps=deps))
+    graph.add_node(WorkflowStep.RETRIEVE.value, retrieve_node)
+    graph.add_node(WorkflowStep.TOOL.value, partial(tool_node, deps=deps))
     graph.add_node(WorkflowStep.THINK.value, partial(think_node, deps=deps))
-    graph.add_node(WorkflowStep.ANSWER.value, partial(_answer_node, deps=deps))
-    graph.add_edge(START, WorkflowStep.PLAN.value)
+    graph.add_node(WorkflowStep.ANSWER.value, answer_node)
+    graph.add_conditional_edges(
+        START,
+        route_from_state,
+        {
+            WorkflowStep.PLAN.value: WorkflowStep.PLAN.value,
+            WorkflowStep.RETRIEVE.value: WorkflowStep.RETRIEVE.value,
+            WorkflowStep.TOOL.value: WorkflowStep.TOOL.value,
+            WorkflowStep.THINK.value: WorkflowStep.THINK.value,
+            WorkflowStep.ANSWER.value: WorkflowStep.ANSWER.value,
+        },
+    )
     graph.add_conditional_edges(
         WorkflowStep.PLAN.value,
         route_after_plan,
         {
-            WorkflowStep.RETRIEVE.value: WorkflowStep.INJECT_SKILLS.value,
+            WorkflowStep.RETRIEVE.value: WorkflowStep.RETRIEVE.value,
             WorkflowStep.ANSWER.value: WorkflowStep.ANSWER.value,
         },
     )
-    graph.add_edge(WorkflowStep.INJECT_SKILLS.value, WorkflowStep.RETRIEVE.value)
     graph.add_conditional_edges(
         WorkflowStep.RETRIEVE.value,
         route_after_retrieve,
         {
-            WorkflowStep.RETRIEVE.value: WorkflowStep.RETRIEVE.value,
+            WorkflowStep.TOOL.value: WorkflowStep.TOOL.value,
+        },
+    )
+    graph.add_conditional_edges(
+        WorkflowStep.TOOL.value,
+        route_after_tool,
+        {
             WorkflowStep.THINK.value: WorkflowStep.THINK.value,
         },
     )

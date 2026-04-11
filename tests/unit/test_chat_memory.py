@@ -1,12 +1,10 @@
+import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from eco_rag.chat import (
-    Messages,
-    Sessions,
-)
+from eco_rag.chat import Messages, Sessions
 
 
 class ChatMemoryTests(unittest.TestCase):
@@ -17,9 +15,9 @@ class ChatMemoryTests(unittest.TestCase):
             max_context_messages=2,
             preserve_system_messages=False,
         )
-        messages.append("user", "one")
-        messages.append("assistant", "two")
-        messages.append("user", "three")
+        messages.append("user", "one", message_type="user")
+        messages.append("assistant", "two", message_type="answer")
+        messages.append("user", "three", message_type="user")
 
         context = messages.build_context()
 
@@ -38,8 +36,8 @@ class ChatMemoryTests(unittest.TestCase):
         first_messages = Messages(sessions=first_sessions)
         second_messages = Messages(sessions=second_sessions)
 
-        first_messages.append("user", "hello")
-        second_messages.append("user", "world")
+        first_messages.append("user", "hello", message_type="user")
+        second_messages.append("user", "world", message_type="user")
 
         sessions = first_sessions.list()
 
@@ -51,10 +49,11 @@ class ChatMemoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             first_sessions = Sessions(session_id="chat/main", base_dir=tmpdir)
             first_messages = Messages(sessions=first_sessions)
-            first_messages.append("user", "persist me")
+            first_messages.append("user", "persist me", message_type="user")
             first_messages.append(
                 "assistant",
                 "still here",
+                message_type="answer",
                 token_usage={
                     "prompt_tokens": 12,
                     "completion_tokens": 5,
@@ -104,32 +103,114 @@ class ChatMemoryTests(unittest.TestCase):
             self.assertEqual(reloaded_sessions.summary()["token_usage"]["prompt_cache_hit_tokens"], 7)
             self.assertNotIn("prompt_cache_miss_tokens", payload["usage"])
 
-    def test_workflow_metadata_persists_without_entering_llm_context(self):
-        sessions = Sessions(session_id="workflow", storage={})
+    def test_next_turn_context_prefers_last_think_over_answer(self):
+        sessions = Sessions(session_id="workflow-think", storage={})
         messages = Messages(sessions=sessions)
-        messages.append("user", "hello")
+        messages.append("user", "hello", message_type="user")
+        messages.append(
+            "assistant",
+            "[plan]\nNeed retrieval.\n[next]\nretrieve\n[retrieve]\nlegacy_search(\"hello\")",
+            message_type="plan",
+            workflow_turn_id="turn-1",
+        )
+        messages.append(
+            "tool",
+            "[tool]\nlegacy_search(query='hello')",
+            message_type="tool",
+            workflow_turn_id="turn-1",
+            tool_name="legacy_search",
+        )
+        messages.append(
+            "assistant",
+            "[think]\nThe evidence is enough.\n[next]\nanswer\n[answer]\nworld",
+            message_type="think",
+            workflow_turn_id="turn-1",
+        )
         messages.append(
             "assistant",
             "world",
-            workflow={
-                "status": "completed",
-                "answer": "world",
-                "trace": [{"node": "plan", "output": '{"next_step":"answer"}'}],
-            },
+            message_type="answer",
+            workflow_turn_id="turn-1",
         )
 
         history = messages.history()
         context = messages.build_context()
 
-        self.assertEqual(history[-1]["workflow"]["answer"], "world")
-        self.assertEqual(history[-1]["workflow"]["trace"][0]["node"], "plan")
+        self.assertEqual(history[1]["message_type"], "plan")
+        self.assertEqual(history[2]["role"], "tool")
+        self.assertEqual(history[2]["tool_name"], "legacy_search")
+        self.assertNotIn("workflow", history[-1])
         self.assertEqual(
             context,
             [
                 {"role": "user", "content": "hello"},
-                {"role": "assistant", "content": "world"},
+                {"role": "assistant", "content": "[think]\nThe evidence is enough."},
             ],
         )
+
+    def test_next_turn_context_uses_plan_for_direct_answer_turn(self):
+        sessions = Sessions(session_id="workflow-plan", storage={})
+        messages = Messages(sessions=sessions)
+        messages.append("user", "hi", message_type="user")
+        messages.append(
+            "assistant",
+            "[plan]\nThis is a greeting.\n[next]\nanswer\n[answer]\nHello!",
+            message_type="plan",
+            workflow_turn_id="turn-1",
+        )
+        messages.append(
+            "assistant",
+            "Hello!",
+            message_type="answer",
+            workflow_turn_id="turn-1",
+        )
+
+        context = messages.build_context()
+
+        self.assertEqual(
+            context,
+            [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "[plan]\nThis is a greeting."},
+            ],
+        )
+
+
+class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_internal_workflow_messages_are_read_only(self):
+        sessions = Sessions(session_id="readonly", storage={})
+        messages = Messages(sessions=sessions)
+        plan_message = messages.append(
+            "assistant",
+            "[plan]\nNeed retrieval.",
+            message_type="plan",
+            workflow_turn_id="turn-1",
+        )
+
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            await messages.apply("edit", message_id=plan_message.id, content="changed")
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            await messages.apply("delete", message_id=plan_message.id)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            await messages.apply("rollback", message_id=plan_message.id)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            await messages.apply("regenerate", message_id=plan_message.id, response_factory=lambda _context: ("x", None))
+
+    async def test_system_prompt_reset_keeps_one_top_level_system_message(self):
+        sessions = Sessions(session_id="system", storage={})
+        messages = Messages(sessions=sessions, default_system_prompt="default system")
+        messages.ensure_system_prompt()
+
+        await messages.apply("system_prompt", content="custom system")
+        state = sessions.get()
+        self.assertEqual([item.role for item in state["messages"]], ["system"])
+        self.assertEqual(state["messages"][0].content, "custom system")
+
+        await messages.apply("delete", message_id=state["messages"][0].id)
+        state = sessions.get()
+        self.assertEqual([item.role for item in state["messages"]], ["system"])
+        self.assertEqual(state["messages"][0].content, "default system")
+
 
 if __name__ == "__main__":
     unittest.main()

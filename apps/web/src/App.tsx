@@ -2,7 +2,14 @@ import { useState } from "react";
 
 import { ChatHeader, MessageComposer, MessageList } from "@/components/chat";
 import { Button, Modal } from "@/components/common";
-import { ModelSettingsModal, ModelSettingsPanel, SessionPanel, WorkflowPanel } from "@/components/panels";
+import {
+  DatabasePanel,
+  DatabaseSettingsModal,
+  ModelSettingsModal,
+  ModelSettingsPanel,
+  SessionPanel,
+  WorkflowPanel,
+} from "@/components/panels";
 import { useChatWorkspace } from "@/hooks/useChatWorkspace";
 
 export default function App() {
@@ -42,6 +49,16 @@ export default function App() {
               }}
               ready={state.ready}
               sessions={state.sessions}
+            />
+
+            <DatabasePanel
+              activeDatabaseId={state.activeDatabaseId}
+              busy={state.busy}
+              databases={state.databases}
+              onOpenSettings={actions.openDatabaseSettings}
+              onSelect={(databaseId) => {
+                void actions.selectDatabase(databaseId);
+              }}
             />
           </aside>
 
@@ -162,6 +179,25 @@ export default function App() {
         onUpdateEmbeddingModel={drafts.updateEmbeddingModel}
         open={drafts.modelSettingsOpen}
         settings={drafts.modelSettingsDraft}
+      />
+
+      <DatabaseSettingsModal
+        activeDatabaseId={state.activeDatabaseId}
+        busy={state.busy}
+        databases={state.databases}
+        embeddingModelNames={workspace.embeddingModelNames}
+        onClose={actions.closeDatabaseSettings}
+        onCreate={(name, embeddingModelName) => {
+          void actions.createDatabase(name, embeddingModelName);
+        }}
+        onDelete={actions.openDeleteDatabaseDialog}
+        onRename={(database, name) => {
+          void actions.renameDatabase(database, name);
+        }}
+        onSelect={(databaseId) => {
+          void actions.selectDatabase(databaseId);
+        }}
+        open={drafts.databaseSettingsOpen}
       />
     </>
   );

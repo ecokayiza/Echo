@@ -1,6 +1,6 @@
 import { EmptyState } from "@/components/common/EmptyState";
 import { SectionCard } from "@/components/common/SectionCard";
-import type { WorkflowNodeStatus, WorkflowSnapshot } from "@/types/chat";
+import type { WorkflowSnapshot } from "@/types/chat";
 import { WorkflowGraph } from "./WorkflowGraph";
 
 interface WorkflowPanelProps {
@@ -8,40 +8,32 @@ interface WorkflowPanelProps {
 }
 
 export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
+  if (!workflow) {
+    return (
+      <SectionCard eyebrow="Workflow">
+        <EmptyState
+          title="No Live Workflow"
+          description="Run a message to see the current LangGraph route here while it is in flight."
+        />
+      </SectionCard>
+    );
+  }
+
   return (
-    <SectionCard
-      eyebrow="Trace"
-    >
+    <SectionCard eyebrow="Workflow">
       <div aria-label="Workflow modern graph" style={{ padding: "20px 0" }}>
-        <WorkflowGraph nodes={workflow?.node_statuses || []} activeNode={workflow?.active_node || null} />
+        <WorkflowGraph nodes={workflow.node_statuses} activeNode={workflow.active_node || null} />
       </div>
 
-      {workflow && (
-        <>
-          <div className="workflow-copy">
-            <span className="workflow-copy__label">Query</span>
-            <p>{workflow.query}</p>
-          </div>
+      <div className="workflow-copy">
+        <span className="workflow-copy__label">Query</span>
+        <p>{workflow.query}</p>
+      </div>
 
-          <div className="workflow-copy">
-            <span className="workflow-copy__label">Logs</span>
-            <div className="workflow-log-list">
-              {workflow.logs.map((log, index) => (
-                <p className="workflow-log-list__item" key={`${log.level}-${log.node}-${index}`}>
-                  [{log.level}]
-                  {log.node ? ` ${log.node}: ` : " "}
-                  {log.message}
-                </p>
-              ))}
-            </div>
-          </div>
-
-          <div className="workflow-copy">
-            <span className="workflow-copy__label">Result</span>
-            <p>{workflow.errors.length > 0 ? workflow.errors.join(" ") : workflow.answer}</p>
-          </div>
-        </>
-      )}
+      <div className="workflow-copy">
+        <span className="workflow-copy__label">Result</span>
+        <p>{workflow.errors.length > 0 ? workflow.errors.join(" ") : workflow.answer || workflow.status}</p>
+      </div>
     </SectionCard>
   );
 }

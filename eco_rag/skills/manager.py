@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Final
 
 SKILLS_DIR = Path(__file__).resolve().parent
-SKILLS_CATALOG_PATH = SKILLS_DIR / "skills.md"
 SKILL_COMMAND_PATTERN = re.compile(r"^/skill\s+([A-Za-z0-9_-]+)(?:\s+(.*))?$", re.IGNORECASE | re.DOTALL)
-
-
-def load_skill_catalog() -> str:
-    """Return the skill summary injected before retrieval."""
-    return SKILLS_CATALOG_PATH.read_text(encoding="utf-8").strip()
+DEFAULT_SKILLS: Final[tuple[str, ...]] = ("database_search", "web_search")
+_DEFAULT_SKILL_SET: Final[frozenset[str]] = frozenset(DEFAULT_SKILLS)
 
 
 def list_available_skills() -> list[str]:
     """List all concrete skill document names."""
-    return sorted(path.stem for path in SKILLS_DIR.glob("*.md") if path.name != SKILLS_CATALOG_PATH.name)
+    discovered = {path.stem for path in SKILLS_DIR.glob("*.md") if path.name != "skills.md"}
+    ordered = [skill for skill in DEFAULT_SKILLS if skill in discovered]
+    extras = sorted(discovered - _DEFAULT_SKILL_SET)
+    return [*ordered, *extras]
 
 
 def load_skill_document(skill_name: str) -> tuple[str, str]:

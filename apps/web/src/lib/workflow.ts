@@ -30,7 +30,6 @@ export function buildPendingWorkflow(meta: MetaResponse | null, query: string): 
 
   return {
     query,
-    context_items: [],
     answer: "",
     status: "running",
     active_node: "plan",
@@ -39,7 +38,7 @@ export function buildPendingWorkflow(meta: MetaResponse | null, query: string): 
       status: node === "plan" ? "running" : "queued",
       detail: null,
     })),
-    logs: [{ level: "info", node: "plan", message: "Workflow created." }],
+    logs: [],
     errors: [],
   };
 }

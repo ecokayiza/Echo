@@ -1,48 +1,30 @@
 # 前后端接口契约
 
-这份文档定义 `apps/web` 与 `apps/api` 之间的交互协议。
-
-重点说明：
-
-- 前端可以调用哪些接口
-- 请求体和响应体结构
-- SSE 事件格式
-- session / message 行为规则
-- workflow snapshot 的字段要求
-
-## 适用范围
-
-当前前端主路径包括：
-
-- 读取元信息
-- 列表 / 创建 / 选择 / 删除 session
-- 更新 system prompt
-- 编辑 / 删除 / 回滚消息
-- 流式发送消息
-- 流式重新生成消息
+这份文档定义 `apps/web` 与 `apps/api` 当前使用的真实协议。
 
 ## 全局规则
 
-- 所有普通 HTTP 请求和响应都使用 JSON。
-- 所有时间使用 UTC ISO-8601 字符串。
-- message `role` 只有三种：
+- 普通 HTTP 请求和响应都使用 JSON
+- 所有时间使用 UTC ISO-8601 字符串
+- SSE 事件使用 `event: <name>` + `data: <json>`
+- message `role` 允许：
   - `system`
   - `user`
   - `assistant`
-- workflow 节点名固定为：
+  - `tool`
+- workflow steps 固定为：
   - `plan`
-  - `inject_skills`
   - `retrieve`
+  - `tool`
   - `think`
   - `answer`
-- workflow 运行状态固定为：
+- workflow statuses 固定为：
   - `queued`
   - `running`
   - `completed`
   - `failed`
-- 前端不会为后端补 workflow 字段；后端必须返回完整结构。
 
-## 共享数据结构
+## 共享结构
 
 ### `TokenUsage`
 
@@ -55,24 +37,18 @@
 }
 ```
 
-说明：
-
-- 各字段可以按需缺省
-- 但只要返回 usage，就必须使用这套字段名
-
 ### `SessionSummary`
 
 ```json
 {
   "session_id": "session-123",
-  "title": "天气对话",
+  "title": "Repo workflow",
   "created_at": "2026-04-02T09:00:00+00:00",
   "updated_at": "2026-04-02T09:05:00+00:00",
-  "message_count": 3,
-  "preview": "今天会比较暖和。",
+  "message_count": 5,
+  "preview": "answer text",
   "token_usage": {
     "prompt_tokens": 123,
-    "prompt_cache_hit_tokens": 64,
     "completion_tokens": 27,
     "total_tokens": 150
   },
@@ -86,20 +62,46 @@
 {
   "id": "message-3",
   "role": "assistant",
-  "content": "今天会比较暖和。",
+  "content": "[plan]\nNeed retrieval.",
+  "message_type": "plan",
+  "workflow_turn_id": "user-1",
+  "tool_name": null,
   "token_usage": {
-    "prompt_tokens": 123,
-    "prompt_cache_hit_tokens": 64,
-    "completion_tokens": 27,
-    "total_tokens": 150
+    "prompt_tokens": 5,
+    "completion_tokens": 1,
+    "total_tokens": 6
   }
 }
 ```
 
-说明：
+可选字段：
 
-- `pending` 只是前端本地字段
-- 后端不会返回 `pending`
+- `message_type`
+- `workflow_turn_id`
+- `tool_name`
+- `token_usage`
+
+`message_type` 允许：
+
+- `system`
+- `user`
+- `plan`
+- `think`
+- `tool`
+- `answer`
+
+只读消息：
+
+- `plan`
+- `think`
+- `tool`
+
+这些消息不允许：
+
+- edit
+- delete
+- rollback
+- regenerate
 
 ### `SessionState`
 
@@ -107,49 +109,44 @@
 {
   "session": {
     "session_id": "session-123",
-    "title": "天气对话",
+    "title": "Repo workflow",
     "created_at": "2026-04-02T09:00:00+00:00",
     "updated_at": "2026-04-02T09:05:00+00:00",
-    "message_count": 3,
-    "preview": "今天会比较暖和。",
+    "message_count": 5,
+    "preview": "answer text",
     "token_usage": {
       "prompt_tokens": 123,
-      "prompt_cache_hit_tokens": 64,
       "completion_tokens": 27,
       "total_tokens": 150
     },
     "total_tokens": 150
   },
-  "messages": [
-    {
-      "id": "message-1",
-      "role": "system",
-      "content": "请清晰、简洁地回答。"
-    },
-    {
-      "id": "message-2",
-      "role": "user",
-      "content": "今天天气怎么样？"
-    },
-    {
-      "id": "message-3",
-      "role": "assistant",
-      "content": "今天会比较暖和。",
-      "token_usage": {
-        "prompt_tokens": 123,
-        "prompt_cache_hit_tokens": 64,
-        "completion_tokens": 27,
-        "total_tokens": 150
-      }
-    }
-  ]
+  "messages": []
 }
 ```
 
-约束：
+### `DatabaseRecord`
 
-- `session` 必须是完整的 `SessionSummary`
-- `messages` 必须是完整、有序的消息列表
+```json
+{
+  "id": "db-123",
+  "name": "Local Docs",
+  "collection_name": "db_local_docs_ab12cd34",
+  "embedding_model_name": "Local Qwen3 Embedding",
+  "document_count": 42,
+  "created_at": "2026-04-11T11:00:00+00:00",
+  "updated_at": "2026-04-11T11:05:00+00:00"
+}
+```
+
+### `DatabaseState`
+
+```json
+{
+  "active_database_id": "db-123",
+  "databases": []
+}
+```
 
 ### `WorkflowNodeStatus`
 
@@ -157,7 +154,7 @@
 {
   "node": "plan",
   "status": "completed",
-  "detail": "Planner chose the first action."
+  "detail": "retrieve"
 }
 ```
 
@@ -165,9 +162,9 @@
 
 ```json
 {
-  "level": "info",
-  "node": "plan",
-  "message": "plan started."
+  "level": "error",
+  "node": "tool",
+  "message": "Database is not configured."
 }
 ```
 
@@ -175,39 +172,30 @@
 
 ```json
 {
-  "query": "今天天气怎么样？",
-  "context_items": [],
-  "answer": "今天会比较暖和。",
-  "token_usage": {
-    "prompt_tokens": 123,
-    "prompt_cache_hit_tokens": 64,
-    "completion_tokens": 27,
-    "total_tokens": 150
-  },
+  "workflow_turn_id": "user-1",
+  "query": "Explain the repo workflow",
+  "answer": "Here is the answer.",
   "status": "completed",
   "active_node": null,
   "node_statuses": [
-    { "node": "plan", "status": "completed", "detail": "可以直接开始推理。" },
-    { "node": "inject_skills", "status": "skipped", "detail": "这一路径没有进入检索准备阶段。" },
-    { "node": "retrieve", "status": "skipped", "detail": "这一路径不需要外部上下文。" },
-    { "node": "think", "status": "completed", "detail": "当前上下文足以回答。" },
-    { "node": "answer", "status": "completed", "detail": "已生成最终答案。" }
+    { "node": "plan", "status": "completed", "detail": "retrieve" },
+    { "node": "retrieve", "status": "completed", "detail": null },
+    { "node": "tool", "status": "completed", "detail": "web_search" },
+    { "node": "think", "status": "completed", "detail": "answer" },
+    { "node": "answer", "status": "completed", "detail": null }
   ],
-  "logs": [
-    { "level": "info", "node": null, "message": "Workflow created." },
-    { "level": "info", "node": "plan", "message": "plan started." }
-  ],
+  "logs": [],
   "errors": []
 }
 ```
 
-强约束：
+约束：
 
 - `node_statuses` 必须存在
 - `node_statuses.length` 必须等于 `meta.workflow_steps.length`
+- `active_node` 必须存在，结束时可为 `null`
 - `logs` 必须存在
-- `active_node` 必须存在；结束时可以为 `null`
-- `status` 必须与当前 workflow 真实状态一致
+- `errors` 必须存在
 
 ### `ChatResponse`
 
@@ -215,71 +203,33 @@
 {
   "session": {
     "session_id": "session-123",
-    "title": "天气对话",
+    "title": "Repo workflow",
     "created_at": "2026-04-02T09:00:00+00:00",
     "updated_at": "2026-04-02T09:05:00+00:00",
-    "message_count": 3,
-    "preview": "今天会比较暖和。",
+    "message_count": 5,
+    "preview": "Here is the answer.",
     "token_usage": {
       "prompt_tokens": 123,
-      "prompt_cache_hit_tokens": 64,
       "completion_tokens": 27,
       "total_tokens": 150
     },
     "total_tokens": 150
   },
-  "messages": [
-    {
-      "id": "message-1",
-      "role": "system",
-      "content": "请清晰、简洁地回答。"
-    },
-    {
-      "id": "message-2",
-      "role": "user",
-      "content": "今天天气怎么样？"
-    },
-    {
-      "id": "message-3",
-      "role": "assistant",
-      "content": "今天会比较暖和。",
-      "token_usage": {
-        "prompt_tokens": 123,
-        "prompt_cache_hit_tokens": 64,
-        "completion_tokens": 27,
-        "total_tokens": 150
-      }
-    }
-  ],
-  "reply": "今天会比较暖和。",
+  "messages": [],
+  "reply": "Here is the answer.",
   "token_usage": {
     "prompt_tokens": 123,
-    "prompt_cache_hit_tokens": 64,
     "completion_tokens": 27,
     "total_tokens": 150
   },
   "workflow": {
-    "query": "今天天气怎么样？",
-    "context_items": [],
-    "answer": "今天会比较暖和。",
-    "token_usage": {
-      "prompt_tokens": 123,
-      "prompt_cache_hit_tokens": 64,
-      "completion_tokens": 27,
-      "total_tokens": 150
-    },
+    "workflow_turn_id": "user-1",
+    "query": "Explain the repo workflow",
+    "answer": "Here is the answer.",
     "status": "completed",
     "active_node": null,
-    "node_statuses": [
-      { "node": "plan", "status": "completed", "detail": "可以直接开始推理。" },
-      { "node": "inject_skills", "status": "skipped", "detail": "这一路径没有进入检索准备阶段。" },
-      { "node": "retrieve", "status": "skipped", "detail": "这一路径不需要外部上下文。" },
-      { "node": "think", "status": "completed", "detail": "当前上下文足以回答。" },
-      { "node": "answer", "status": "completed", "detail": "已生成最终答案。" }
-    ],
-    "logs": [
-      { "level": "info", "node": null, "message": "Workflow created." }
-    ],
+    "node_statuses": [],
+    "logs": [],
     "errors": []
   }
 }
@@ -287,18 +237,21 @@
 
 约束：
 
-- `session` 和 `messages` 必须是最终、已持久化后的状态
-- 顶层 `reply` 和顶层 `token_usage` 只表示“这一次新生成的 assistant 回复”
-- `workflow` 表示这一轮对话对应的完整 workflow 结果
+- `session` 和 `messages` 必须是最终已持久化状态
+- 顶层 `reply` 是本次新生成的 final answer
+- 顶层 `token_usage` 是这次 workflow 内部记录的聚合 usage
+- 顶层 `workflow` 是本轮 live workflow 的最终 snapshot
+- `messages[*]` 不再持久化 `workflow` 字段
+
+Embedding provider 本身不属于 `apps/web <-> apps/api` 契约。
+
+约定只有一条：
+
+- `models.json` 里的 embedding `base_url` 必须指向一个外部 OpenAI 兼容 `/v1/embeddings` 服务
 
 ## HTTP 接口
 
 ### `GET /api/health`
-
-用途：
-
-- 检查后端是否可用
-- 返回当前默认模型
 
 响应示例：
 
@@ -311,65 +264,70 @@
 
 ### `GET /api/meta`
 
-用途：
-
-- 获取 workflow 枚举
-- 获取默认 system prompt
-
 响应示例：
 
 ```json
 {
   "workflow_statuses": ["queued", "running", "completed", "failed"],
-  "workflow_steps": ["plan", "inject_skills", "retrieve", "think", "answer"],
-  "default_system_prompt": "You are the chat assistant for Eco_RAG. Be clear, grounded, and concise. If you are unsure, say so."
+  "workflow_steps": ["plan", "retrieve", "tool", "think", "answer"],
+  "default_system_prompt": "..."
 }
 ```
 
 ### `GET /api/model-settings`
 
-用途：
-
-- 读取根目录 `models.json` 中完整的模型配置文档
-- 包括所有 chat models、embedding models 和当前 active 选择
-
-响应示例：
-
-```json
-{
-  "active_chat_model": "DeepSeek Chat",
-  "active_embedding_model": "Default Embedding",
-  "chat_models": [
-    {
-      "name": "DeepSeek Chat",
-      "model": "deepseek-chat",
-      "api_key": "sk-xxxx",
-      "base_url": "https://api.deepseek.com",
-      "temperature": 1.0,
-      "top_p": 1.0,
-      "enable_thinking": false
-    }
-  ],
-  "embedding_models": [
-    {
-      "name": "Default Embedding",
-      "model": "text-embedding-3-small",
-      "api_key": "sk-xxxx",
-      "base_url": "https://api.openai.com/v1"
-    }
-  ]
-}
-```
+读取根目录 `models.json`。
 
 ### `PUT /api/model-settings`
 
-用途：
+完整覆盖保存根目录 `models.json`。
 
-- 直接更新根目录 `models.json`
+### `GET /api/databases`
 
-请求体和响应体：
+响应：
 
-- 与 `GET /api/model-settings` 相同
+- `DatabaseState`
+
+### `POST /api/databases`
+
+请求：
+
+```json
+{
+  "name": "Local Docs",
+  "embedding_model_name": "Local Qwen3 Embedding"
+}
+```
+
+响应：
+
+- `DatabaseState`
+
+### `PATCH /api/databases/{database_id}`
+
+请求：
+
+```json
+{
+  "name": "Renamed Database"
+}
+```
+
+响应：
+
+- `DatabaseState`
+
+### `POST /api/databases/{database_id}/select`
+
+响应：
+
+- `DatabaseState`
+
+### `DELETE /api/databases/{database_id}`
+
+响应：
+
+- `DatabaseState`
 
 ### `GET /api/sessions`
 
@@ -383,8 +341,8 @@
 
 ```json
 {
-  "title": "可选标题",
-  "session_id": "可选自定义 id"
+  "title": "Optional title",
+  "session_id": "optional-session-id"
 }
 ```
 
@@ -404,7 +362,7 @@
 
 ```json
 {
-  "title": "新的会话标题"
+  "title": "New title"
 }
 ```
 
@@ -429,26 +387,15 @@
 
 ```json
 {
-  "content": "请直接、务实地回答。"
+  "content": "Be concise."
 }
 ```
 
-清空 system prompt：
-
-```json
-{
-  "content": null
-}
-```
+清空会被拒绝，因为 session 必须始终保留一个 system prompt。
 
 响应：
 
 - `SessionState`
-
-行为要求：
-
-- 更新 system prompt 时，不得删除后续消息
-- 清空 system prompt 时，必须保留剩余对话
 
 ### `PATCH /api/sessions/{session_id}/messages/{message_id}`
 
@@ -456,7 +403,7 @@
 
 ```json
 {
-  "content": "修改后的内容"
+  "content": "Updated content"
 }
 ```
 
@@ -464,10 +411,7 @@
 
 - `SessionState`
 
-行为要求：
-
-- 编辑普通消息时，不能裁掉后续消息
-- 编辑 system message 等价于更新 system prompt
+只读内部消息必须返回 `400`。
 
 ### `DELETE /api/sessions/{session_id}/messages/{message_id}`
 
@@ -475,10 +419,7 @@
 
 - `SessionState`
 
-行为要求：
-
-- 删除 system message 时，只删除 system prompt
-- 删除非 system message 时，从该消息开始截断分支
+只读内部消息必须返回 `400`。
 
 ### `POST /api/sessions/{session_id}/messages/{message_id}/rollback`
 
@@ -486,49 +427,42 @@
 
 - `SessionState`
 
-行为要求：
+只读内部消息必须返回 `400`。
 
-- 保留目标消息
-- 删除该消息之后的所有消息
-
-## 主流式聊天接口
+## 流式接口
 
 ### `POST /api/sessions/{session_id}/messages/stream`
-
-这是 UI 的主发送入口。
 
 请求示例：
 
 ```json
 {
-  "message": "请简单解释什么是 RAG。",
-  "system_prompt": "请简洁、务实地回答。"
+  "message": "Explain the repo workflow.",
+  "system_prompt": "Be concise."
 }
 ```
 
-行为要求：
+行为约束：
 
 - `message` 必填
 - `system_prompt` 可选
-- 如果请求里带了 `system_prompt`，后端必须先更新 session，再追加 user message
-- user message 必须先落盘，再启动 workflow
-- 返回值是 SSE，不是普通 JSON
+- user message 必须先持久化，再启动 workflow
+- 返回值是 SSE
 
 ### `POST /api/sessions/{session_id}/messages/{message_id}/regenerate/stream`
 
-这是 UI 的主重生成入口。
-
-请求示例：
+请求体：
 
 ```json
 {}
 ```
 
-行为要求：
+行为约束：
 
-- 目标是 assistant message 时，后端必须向前找到对应 user message
-- 目标是 user message 时，从该点直接重跑
-- system message 不允许重生成
+- 目标是 assistant 时，后端需要找到对应 user turn
+- 目标是 user 时，直接从该 user turn 重跑
+- system message 不允许 regenerate
+- 只读内部消息不允许 regenerate
 
 ## SSE 契约
 
@@ -545,28 +479,16 @@ payload：
 
 - `WorkflowSnapshot`
 
-用途：
-
-- 更新 workflow 调试面板
-- 更新状态栏
-- 同步当前 node、日志和错误
-
 ### `chunk`
 
 payload 示例：
 
 ```json
 {
-  "delta": "暖和",
-  "content": "今天会比较暖和"
+  "delta": "partial text",
+  "content": "full partial text"
 }
 ```
-
-规则：
-
-- `delta` 是本次新增文本
-- `content` 是当前累计完整文本
-- 前端用 `content` 覆盖 pending assistant 内容
 
 ### `done`
 
@@ -574,27 +496,12 @@ payload：
 
 - `ChatResponse`
 
-规则：
-
-- 必须返回最终、已落盘的 session 状态
-- 前端用它覆盖乐观 UI
-
 ### `error`
 
 payload 示例：
 
 ```json
 {
-  "detail": "Chat request failed: Missing API key. Update 'models.json' with a valid api_key."
+  "detail": "Chat request failed: Missing API key."
 }
 ```
-
-规则：
-
-- 当前流式请求应视为失败
-- 前端直接展示 `detail`
-
-## 当前契约问题
-
-- 前端严格依赖完整 workflow snapshot，所以后端改字段需要同步修改前端类型和渲染逻辑。
-- `WorkflowSnapshot` 已经偏向“调试视图”而不是极简业务返回，这对开发期很有帮助，但也意味着后端 payload 设计必须保持稳定。

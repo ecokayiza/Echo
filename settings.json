@@ -1,0 +1,5 @@
+{
+  "max_context_messages": 12,
+  "max_retrieve_rounds": 2,
+  "prompt_truncate_chars": 500
+}
