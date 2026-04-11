@@ -8,7 +8,7 @@
 
 .graphWrapper {
   position: relative;
-  width: 280px;
+  width: 320px;
   height: 280px;
 }
 
@@ -30,6 +30,7 @@
   align-items: center;
   width: 80px;
   height: 80px;
+  padding: 0.25rem;
   border-radius: 50%;
   background: white;
   border: 2px solid #e5e7eb;
@@ -42,6 +43,8 @@
   transition: all 0.3s ease;
   line-height: 1.1;
   background-color: #fff;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .node_success {
@@ -58,23 +61,28 @@
 }
 
 .posTopLeft {
-  top: 0;
-  left: 0;
+  top: 20px;
+  left: 20px;
 }
 
 .posTopRight {
-  top: 0;
-  right: 0;
+  top: 20px;
+  right: 20px;
+}
+
+.posCenter {
+  top: 100px;
+  left: 120px;
 }
 
 .posBottomRight {
-  bottom: 0;
-  right: 0;
+  bottom: 20px;
+  right: 20px;
 }
 
 .posBottomLeft {
-  bottom: 0;
-  left: 0;
+  bottom: 20px;
+  left: 20px;
 }
 
 .spinner {

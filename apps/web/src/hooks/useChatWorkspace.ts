@@ -171,6 +171,95 @@ function replaceAtIndex<T>(items: T[], index: number, nextItem: T) {
   return items.map((item, itemIndex) => (itemIndex === index ? nextItem : item));
 }
 
+function normalizeLiveWorkflowRecord(
+  payload: unknown,
+  options: {
+    index: number;
+    fallbackTurnId?: string | null;
+  }
+): MessageRecord | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : null;
+  const content = typeof record.content === "string" ? record.content : "";
+  if (!role || !content.trim()) {
+    return null;
+  }
+
+  const workflowTurnId =
+    typeof record.workflow_turn_id === "string" && record.workflow_turn_id.trim()
+      ? record.workflow_turn_id
+      : options.fallbackTurnId ?? null;
+
+  return {
+    id: `pending-record-${options.index}`,
+    role: role as MessageRecord["role"],
+    content,
+    message_type: typeof record.message_type === "string" ? record.message_type : null,
+    workflow_turn_id: workflowTurnId,
+    tool_name: typeof record.tool_name === "string" ? record.tool_name : null,
+    token_usage:
+      record.token_usage && typeof record.token_usage === "object"
+        ? (record.token_usage as MessageRecord["token_usage"])
+        : null,
+  };
+}
+
+function buildPendingSendMessages(
+  stableMessages: MessageRecord[],
+  outgoing: string,
+  workflow: WorkflowSnapshot,
+  liveRecords: MessageRecord[],
+  content: string
+) {
+  const workflowTurnId =
+    workflow.workflow_turn_id ??
+    liveRecords.at(-1)?.workflow_turn_id ??
+    null;
+
+  return [
+    ...stableMessages,
+    { id: "pending-user", role: "user" as const, content: outgoing, pending: true },
+    ...liveRecords,
+    {
+      id: "pending-assistant",
+      role: "assistant" as const,
+      content,
+      pending: true,
+      workflow,
+      workflow_turn_id: workflowTurnId,
+    },
+  ];
+}
+
+function buildPendingRegenerateMessages(
+  baseMessages: MessageRecord[],
+  workflow: WorkflowSnapshot,
+  liveRecords: MessageRecord[],
+  content: string
+) {
+  const workflowTurnId =
+    workflow.workflow_turn_id ??
+    liveRecords.at(-1)?.workflow_turn_id ??
+    null;
+
+  return [
+    ...baseMessages,
+    ...liveRecords,
+    {
+      id: "pending-assistant",
+      role: "assistant" as const,
+      content,
+      pending: true,
+      workflow,
+      workflow_turn_id: workflowTurnId,
+    },
+  ];
+}
+
 export function useChatWorkspace() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [messageDraft, setMessageDraft] = useState("");
@@ -796,17 +885,15 @@ export function useChatWorkspace() {
     const stableMessages = [...state.messages];
     const pendingWorkflow = buildPendingWorkflow(state.meta, outgoing);
     let currentWorkflow = pendingWorkflow;
+    let currentContent = "Thinking...";
+    let liveRecords: MessageRecord[] = [];
 
     setMessageDraft("");
     startTransition(() => {
       dispatch({ type: "workflow:set", workflow: pendingWorkflow });
       dispatch({
         type: "messages:set",
-        messages: [
-          ...stableMessages,
-          { id: "pending-user", role: "user", content: outgoing, pending: true },
-          { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow },
-        ],
+        messages: buildPendingSendMessages(stableMessages, outgoing, currentWorkflow, liveRecords, currentContent),
       });
     });
 
@@ -824,6 +911,31 @@ export function useChatWorkspace() {
           },
           {
             onEvent: async (eventName, payload) => {
+              if (eventName === "record") {
+                const nextRecord = normalizeLiveWorkflowRecord(payload, {
+                  index: liveRecords.length,
+                  fallbackTurnId: currentWorkflow.workflow_turn_id,
+                });
+                if (!nextRecord) {
+                  return;
+                }
+
+                liveRecords = [...liveRecords, nextRecord];
+                startTransition(() => {
+                  dispatch({
+                    type: "messages:set",
+                    messages: buildPendingSendMessages(
+                      stableMessages,
+                      outgoing,
+                      currentWorkflow,
+                      liveRecords,
+                      currentContent
+                    ),
+                  });
+                });
+                return;
+              }
+
               if (eventName !== "workflow") {
                 return;
               }
@@ -837,11 +949,13 @@ export function useChatWorkspace() {
                 dispatch({ type: "workflow:set", workflow });
                 dispatch({
                   type: "messages:set",
-                  messages: [
-                    ...stableMessages,
-                    { id: "pending-user", role: "user", content: outgoing, pending: true },
-                    { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow },
-                  ],
+                  messages: buildPendingSendMessages(
+                    stableMessages,
+                    outgoing,
+                    currentWorkflow,
+                    liveRecords,
+                    currentContent
+                  ),
                 });
               });
               dispatch({
@@ -854,15 +968,17 @@ export function useChatWorkspace() {
               if (typeof payload.content !== "string") {
                 throw new Error("Streaming chunk is missing content.");
               }
-              const content = payload.content;
+              currentContent = payload.content;
               startTransition(() => {
                 dispatch({
                   type: "messages:set",
-                  messages: [
-                    ...stableMessages,
-                    { id: "pending-user", role: "user", content: outgoing, pending: true },
-                    { id: "pending-assistant", role: "assistant", content, pending: true, workflow: currentWorkflow },
-                  ],
+                  messages: buildPendingSendMessages(
+                    stableMessages,
+                    outgoing,
+                    currentWorkflow,
+                    liveRecords,
+                    currentContent
+                  ),
                 });
               });
             },
@@ -907,12 +1023,14 @@ export function useChatWorkspace() {
     }
     const pendingWorkflow = buildPendingWorkflow(state.meta, question);
     let currentWorkflow = pendingWorkflow;
+    let currentContent = "Thinking...";
+    let liveRecords: MessageRecord[] = [];
 
     startTransition(() => {
       dispatch({ type: "workflow:set", workflow: pendingWorkflow });
       dispatch({
         type: "messages:set",
-        messages: [...baseMessages, { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow }],
+        messages: buildPendingRegenerateMessages(baseMessages, currentWorkflow, liveRecords, currentContent),
       });
     });
 
@@ -928,6 +1046,30 @@ export function useChatWorkspace() {
           },
           {
             onEvent: async (eventName, payload) => {
+              if (eventName === "record") {
+                const nextRecord = normalizeLiveWorkflowRecord(payload, {
+                  index: liveRecords.length,
+                  fallbackTurnId: currentWorkflow.workflow_turn_id,
+                });
+                if (!nextRecord) {
+                  return;
+                }
+
+                liveRecords = [...liveRecords, nextRecord];
+                startTransition(() => {
+                  dispatch({
+                    type: "messages:set",
+                    messages: buildPendingRegenerateMessages(
+                      baseMessages,
+                      currentWorkflow,
+                      liveRecords,
+                      currentContent
+                    ),
+                  });
+                });
+                return;
+              }
+
               if (eventName !== "workflow") {
                 return;
               }
@@ -941,7 +1083,7 @@ export function useChatWorkspace() {
                 dispatch({ type: "workflow:set", workflow });
                 dispatch({
                   type: "messages:set",
-                  messages: [...baseMessages, { id: "pending-assistant", role: "assistant", content: "Thinking...", pending: true, workflow: currentWorkflow }],
+                  messages: buildPendingRegenerateMessages(baseMessages, currentWorkflow, liveRecords, currentContent),
                 });
               });
               dispatch({
@@ -954,11 +1096,11 @@ export function useChatWorkspace() {
               if (typeof payload.content !== "string") {
                 throw new Error("Streaming chunk is missing content.");
               }
-              const content = payload.content;
+              currentContent = payload.content;
               startTransition(() => {
                 dispatch({
                   type: "messages:set",
-                  messages: [...baseMessages, { id: "pending-assistant", role: "assistant", content, pending: true, workflow: currentWorkflow }],
+                  messages: buildPendingRegenerateMessages(baseMessages, currentWorkflow, liveRecords, currentContent),
                 });
               });
             },

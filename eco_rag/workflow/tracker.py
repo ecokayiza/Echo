@@ -85,12 +85,15 @@ class WorkflowTracker:
 
     def snapshot(self, state: WorkflowState) -> dict[str, Any]:
         """Build the minimal workflow snapshot returned to the app."""
+        pending = state.get("pending_retrieve") or {}
+        tool_name = str(pending.get("name") or "").strip() or None
         return {
             "workflow_turn_id": state["workflow_turn_id"],
             "query": state["query"],
             "answer": state.get("prepared_answer", ""),
             "status": self.status,
             "active_node": self.active_node,
+            "tool_name": tool_name,
             "node_statuses": [dict(item) for item in self.node_statuses],
             "logs": [dict(item) for item in self.logs],
             "errors": list(self.errors),

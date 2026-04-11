@@ -70,6 +70,7 @@ export interface WorkflowSnapshot {
   status: string;
   node_statuses: WorkflowNodeStatus[];
   active_node: string | null;
+  tool_name?: string | null;
   logs: WorkflowLog[];
   errors: string[];
 }

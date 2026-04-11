@@ -126,6 +126,9 @@ class ChatService:
                 workflow_snapshot = item["data"]
                 yield {"event": "workflow", "data": workflow_snapshot}
                 continue
+            if item["event"] == "record":
+                yield item
+                continue
             workflow_result = item["data"]
             workflow_snapshot = workflow_result["snapshot"]
 
@@ -212,6 +215,9 @@ class ChatService:
             if item["event"] == "state":
                 workflow_snapshot = item["data"]
                 yield {"event": "workflow", "data": workflow_snapshot}
+                continue
+            if item["event"] == "record":
+                yield item
                 continue
             workflow_result = item["data"]
             workflow_snapshot = workflow_result["snapshot"]

@@ -171,7 +171,9 @@ class WorkflowService:
                     if payload.get("event") == "chunk":
                         yield payload
                     elif payload.get("event") == "record" and isinstance(payload.get("data"), dict):
-                        buffered_records.append(dict(payload["data"]))
+                        record = dict(payload["data"])
+                        buffered_records.append(record)
+                        yield {"event": "record", "data": record}
                     continue
 
                 if mode != "tasks" or not isinstance(payload, dict):

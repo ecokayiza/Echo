@@ -27,6 +27,9 @@ export function MessageList({
   const visibleMessages: MessageRecord[] = [];
 
   for (const message of messages) {
+    if (message.role === "system") {
+      continue;
+    }
     if (["plan", "think", "tool"].includes(message.message_type ?? "") && message.workflow_turn_id) {
       const items = workflowMessagesByTurn.get(message.workflow_turn_id) ?? [];
       items.push(message);

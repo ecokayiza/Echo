@@ -283,11 +283,15 @@ export function MessageCard({
 
 function buildThoughtEntries(message: MessageRecord, workflowMessages: MessageRecord[]): ThoughtEntry[] {
   if (message.pending) {
-    return buildLiveThoughtEntries(message.workflow);
+    return workflowMessages.length > 0 ? buildWorkflowMessageThoughtEntries(workflowMessages) : buildLiveThoughtEntries(message.workflow);
   }
   if (message.role !== "assistant" || message.message_type !== "answer") {
     return [];
   }
+  return buildWorkflowMessageThoughtEntries(workflowMessages);
+}
+
+function buildWorkflowMessageThoughtEntries(workflowMessages: MessageRecord[]): ThoughtEntry[] {
   return workflowMessages.flatMap((entry) => {
     if (entry.message_type === "tool") {
       const toolBlock = extractWorkflowBlock(entry.content, "tool");
@@ -309,16 +313,7 @@ function buildLiveThoughtEntries(workflow: WorkflowSnapshot | null | undefined):
   if (!workflow) {
     return [];
   }
-
-  const entries = workflow.node_statuses
-    .filter((node) => node.status !== "queued")
-    .map((node) => ({
-      label: node.node,
-      content: node.detail || capitalize(node.status),
-    }));
-
   return [
-    ...entries,
     ...workflow.errors.map((error) => ({ label: "error", content: error, level: "error" })),
   ];
 }
@@ -345,8 +340,4 @@ function parseWorkflowSections(content: string): Record<string, string> {
   }
 
   return Object.fromEntries(Object.entries(sections).map(([key, value]) => [key, value.join("\n").trim()]));
-}
-
-function capitalize(value: string): string {
-  return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
