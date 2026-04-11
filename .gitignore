@@ -18,3 +18,4 @@ memory/chat_sessions/*
 memory/artifacts/*
 apps/web/node_modules/
 apps/web/dist/
+models.json
