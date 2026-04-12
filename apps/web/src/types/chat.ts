@@ -51,6 +51,14 @@ export interface DatabaseState {
   databases: DatabaseRecord[];
 }
 
+export interface DatabaseDocumentRecord {
+  id: string;
+  source_name: string;
+  source_type: string;
+  file_path: string | null;
+  chunk_count: number;
+}
+
 export interface WorkflowNodeStatus {
   node: string;
   status: string;

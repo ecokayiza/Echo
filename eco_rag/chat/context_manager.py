@@ -14,6 +14,7 @@ from .chat_model import Message
 
 USAGE_KEYS = ("prompt_tokens", "prompt_cache_hit_tokens", "completion_tokens", "total_tokens")
 READ_ONLY_MESSAGE_TYPES = {"plan", "think", "tool"}
+WORKFLOW_ANSWER_PROXY_TYPES = {"plan", "think"}
 WORKFLOW_SECTION_PATTERN = re.compile(r"(?ms)^\[([a-z_]+)\]\s*(.*?)(?=^\[[a-z_]+\]\s*|\Z)")
 
 
@@ -323,19 +324,27 @@ class Messages:
 
         index = self.find_index(message_id, session["messages"])
         target = session["messages"][index]
-        self._ensure_mutable(target, operation)
+        workflow_answer_proxy = _is_workflow_answer_proxy(target)
+        if not workflow_answer_proxy or operation not in {"edit", "delete"}:
+            self._ensure_mutable(target, operation)
 
         if operation == "edit":
             if target.role == "system":
                 session = self._set_system(session, content or self.default_system_prompt)
                 session = self.sessions.persist(session)
                 return self._result(session, affected_message_id=self.system_message_id(session))
+            if workflow_answer_proxy:
+                target.content = _replace_workflow_answer(target.content, self._text(content, "Message content cannot be empty."))
+                return self._result(self.sessions.persist(session), affected_message_id=message_id)
             target.content = self._text(content, "Message content cannot be empty.")
             return self._result(self.sessions.persist(session), affected_message_id=message_id)
 
         if operation == "delete":
             if target.role == "system":
                 return self._result(self.sessions.persist(self._set_system(session, self.default_system_prompt)))
+            if workflow_answer_proxy and target.workflow_turn_id:
+                session["messages"] = [item for item in session["messages"] if item.workflow_turn_id != target.workflow_turn_id]
+                return self._result(self.sessions.persist(session), affected_message_id=message_id)
             session["messages"] = [*session["messages"][:index], *session["messages"][index + 1 :]]
             return self._result(self.sessions.persist(session), affected_message_id=message_id)
 
@@ -485,12 +494,40 @@ class Messages:
 
 def _sanitize_workflow_context(content: str, message_type: str) -> str:
     """Keep only the reasoning block from a persisted plan or think message."""
-    sections = {
-        match.group(1).strip().lower(): match.group(2).strip()
-        for match in WORKFLOW_SECTION_PATTERN.finditer((content or "").strip())
-    }
+    sections = _workflow_sections(content)
     block_name = message_type.strip().lower()
     block = sections.get(block_name)
     if not block:
         return (content or "").strip()
     return f"[{block_name}]\n{block}".strip()
+
+
+def _is_workflow_answer_proxy(message: Message) -> bool:
+    """Return whether a persisted plan/think message also carries the user-facing answer block."""
+    return (
+        message.role == "assistant"
+        and message.message_type in WORKFLOW_ANSWER_PROXY_TYPES
+        and bool(_workflow_sections(message.content).get("answer"))
+    )
+
+
+def _replace_workflow_answer(content: str, answer: str) -> str:
+    """Replace only the answer block inside one persisted workflow assistant message."""
+    sections = _workflow_sections(content)
+    if not sections.get("answer"):
+        raise ValueError("Workflow message does not contain an answer block.")
+
+    parts: list[str] = []
+    for match in WORKFLOW_SECTION_PATTERN.finditer((content or "").strip()):
+        name = match.group(1).strip().lower()
+        block = answer.strip() if name == "answer" else match.group(2).strip()
+        parts.append(f"[{name}]\n{block}".strip())
+    return "\n\n".join(parts).strip()
+
+
+def _workflow_sections(content: str) -> dict[str, str]:
+    """Parse workflow bracket blocks into a normalized section map."""
+    return {
+        match.group(1).strip().lower(): match.group(2).strip()
+        for match in WORKFLOW_SECTION_PATTERN.finditer((content or "").strip())
+    }

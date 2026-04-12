@@ -1,8 +1,9 @@
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,6 +22,10 @@ from eco_rag.chat.registry import (
 )
 from eco_rag.config import Config
 from eco_rag.indexing import (
+    Assembler,
+    ChunkerFactory,
+    DataLoaderFactory,
+    OpenAICompatibleEmbedder,
     VectorDatabase,
     create_database_settings,
     delete_database_settings,
@@ -35,6 +40,7 @@ from eco_rag.workflow.prompts import default_system_prompt
 
 WEB_DIR = Config.ROOT_DIR / "apps" / "web"
 WEB_DIST_DIR = WEB_DIR / "dist"
+SUPPORTED_UPLOAD_EXTENSIONS = {".md", ".pdf", ".txt"}
 
 
 class SessionSummaryResponse(BaseModel):
@@ -66,6 +72,14 @@ class DatabaseSummaryResponse(BaseModel):
 class DatabaseStateResponse(BaseModel):
     active_database_id: str | None
     databases: list[DatabaseSummaryResponse]
+
+
+class DatabaseDocumentSummaryResponse(BaseModel):
+    id: str
+    source_name: str
+    source_type: str
+    file_path: str | None = None
+    chunk_count: int = 0
 
 
 class CreateSessionRequest(BaseModel):
@@ -240,6 +254,43 @@ def create_app(chat_service: ChatService | None = None):
                 pass
         return DatabaseStateResponse(**_database_state_payload())
 
+    @app.post("/api/databases/{database_id}/documents", response_model=DatabaseStateResponse)
+    async def upload_database_documents(database_id: str, files: list[UploadFile] = File(...)):
+        document = list_database_settings()
+        database = next((item for item in document.databases if item.id == database_id), None)
+        if database is None:
+            raise HTTPException(status_code=404, detail="Database not found.")
+        if not files:
+            raise HTTPException(status_code=400, detail="Select at least one file to upload.")
+
+        assembler = Assembler(
+            VectorDatabase(collection_name=database.collection_name),
+            DataLoaderFactory(),
+            ChunkerFactory(),
+            OpenAICompatibleEmbedder(),
+            database=database,
+        )
+
+        try:
+            for upload in files:
+                saved_path = await _save_uploaded_document(upload, database.collection_name)
+                assembler.delete_file(str(saved_path))
+                assembler.store_file(str(saved_path))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return DatabaseStateResponse(**_database_state_payload())
+
+    @app.get("/api/databases/{database_id}/documents", response_model=list[DatabaseDocumentSummaryResponse])
+    def list_database_documents(database_id: str):
+        document = list_database_settings()
+        database = next((item for item in document.databases if item.id == database_id), None)
+        if database is None:
+            raise HTTPException(status_code=404, detail="Database not found.")
+        try:
+            return VectorDatabase(collection_name=database.collection_name).list_document_summaries()
+        except Exception:
+            return []
+
     @app.get("/api/sessions", response_model=list[SessionSummaryResponse])
     def list_sessions():
         return [SessionSummaryResponse(**session) for session in service.list_sessions()]
@@ -363,6 +414,30 @@ def _database_state_payload() -> dict[str, Any]:
             }
         )
     return {"active_database_id": document.active_database_id, "databases": databases}
+
+
+def _sanitize_upload_filename(filename: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "_", (filename or "").strip())
+    return cleaned.strip(" .") or f"upload-{uuid4().hex[:8]}.txt"
+
+
+async def _save_uploaded_document(upload: UploadFile, collection_name: str):
+    filename = _sanitize_upload_filename((upload.filename or "").split("/")[-1].split("\\")[-1])
+    extension = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if extension not in SUPPORTED_UPLOAD_EXTENSIONS:
+        supported = ", ".join(sorted(SUPPORTED_UPLOAD_EXTENSIONS))
+        raise ValueError(f"Unsupported file type for '{filename}'. Supported types: {supported}.")
+
+    target_dir = Config.DATA_DIR / "uploads" / collection_name
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / filename
+
+    payload = await upload.read()
+    if not payload:
+        raise ValueError(f"Uploaded file '{filename}' is empty.")
+    target_path.write_bytes(payload)
+    await upload.close()
+    return target_path
 
 
 app = create_app()

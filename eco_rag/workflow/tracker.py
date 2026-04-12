@@ -8,7 +8,7 @@ from .state import WorkflowState, WorkflowStatus, WorkflowStep
 
 @dataclass
 class WorkflowTracker:
-    """Track minimal workflow status for UI updates and resume support."""
+    """Track minimal workflow status for live UI updates."""
 
     workflow_turn_id: str
     query: str
@@ -23,25 +23,6 @@ class WorkflowTracker:
         self.logs: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self._set(WorkflowStep.PLAN.value, WorkflowStatus.RUNNING.value, "Planning the next action.")
-
-    @classmethod
-    def from_snapshot(cls, snapshot: dict[str, Any], *, query: str) -> WorkflowTracker:
-        """Rebuild the tracker from a saved workflow snapshot."""
-        workflow_turn_id = str(snapshot.get("workflow_turn_id") or "").strip()
-        tracker = cls(workflow_turn_id=workflow_turn_id, query=query)
-        tracker.status = str(snapshot.get("status") or WorkflowStatus.RUNNING.value)
-        active_node = snapshot.get("active_node")
-        tracker.active_node = str(active_node) if active_node is not None else None
-        node_statuses = snapshot.get("node_statuses")
-        logs = snapshot.get("logs")
-        errors = snapshot.get("errors")
-        if isinstance(node_statuses, list) and len(node_statuses) == len(tracker.node_statuses):
-            tracker.node_statuses = [dict(item) for item in node_statuses if isinstance(item, dict)]
-        if isinstance(logs, list):
-            tracker.logs = [dict(item) for item in logs if isinstance(item, dict)]
-        if isinstance(errors, list):
-            tracker.errors = [str(item) for item in errors]
-        return tracker
 
     def start(self, node: WorkflowStep, detail: str | None = None):
         """Mark one node as running."""

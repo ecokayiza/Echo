@@ -5,7 +5,10 @@ from pathlib import Path
 
 import yaml
 
+from ..skills import DEFAULT_SKILLS, load_skill_document
+
 PROMPT_DIR = Path(__file__).with_name("prompt_templates")
+SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
 
 
 def default_system_prompt(
@@ -15,24 +18,9 @@ def default_system_prompt(
 ) -> str:
     """Render the shared session-level system prompt."""
     return _template("system").format(
-        available_tools=", ".join(available_tools) or "(none)",
-        available_skills=_skills_catalog(list(available_skills)),
+        default_skills=_default_skill_documents(),
+        available_skills=_available_skills_document(list(available_skills)),
     ).strip()
-
-
-def tool_back_message(
-    *,
-    allow_retrieve: bool,
-    available_tools: list[str] | tuple[str, ...] = (),
-) -> dict[str, str]:
-    """Build the runtime-only continuation prompt appended after each tool result."""
-    return {
-        "role": "user",
-        "content": _template("tool_back").format(
-            allow_retrieve="yes" if allow_retrieve else "no",
-            available_tools=", ".join(available_tools) or "(none)",
-        ).strip(),
-    }
 
 
 @lru_cache(maxsize=None)
@@ -45,8 +33,31 @@ def _template(name: str) -> str:
     return str(payload["content"])
 
 
-def _skills_catalog(skills: list[str]) -> str:
-    """Render the short skill catalog."""
-    if not skills:
+@lru_cache(maxsize=None)
+def _default_skill_documents() -> str:
+    """Render the bundled markdown for all default skills."""
+    documents = []
+    for skill_name in DEFAULT_SKILLS:
+        _, content = load_skill_document(skill_name)
+        if content.strip():
+            documents.append(content.strip())
+    return "\n\n".join(documents) if documents else "(none)"
+
+
+@lru_cache(maxsize=None)
+def _skills_catalog_document() -> str:
+    """Render the shared skills index markdown."""
+    path = SKILLS_DIR / "skills.md"
+    if not path.exists():
         return "(none)"
-    return "\n".join(f"- {skill}" for skill in skills)
+    return path.read_text(encoding="utf-8").strip() or "(none)"
+
+
+def _available_skills_document(skills: list[str]) -> str:
+    """Render the skills index, appending any discovered extras if needed."""
+    catalog = _skills_catalog_document()
+    extras = [skill for skill in skills if f"`{skill}`" not in catalog]
+    if not extras:
+        return catalog
+    extra_lines = "\n".join(f"- `{skill}`" for skill in extras)
+    return f"{catalog}\n\nAdditional discovered skills:\n{extra_lines}".strip()

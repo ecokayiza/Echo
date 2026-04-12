@@ -186,7 +186,7 @@ textarea:focus-visible,
   height: 100%;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-columns: 260px minmax(0, 1fr) 350px;
   gap: 0;
   align-items: stretch;
 }
@@ -231,6 +231,12 @@ textarea:focus-visible,
   justify-content: space-between;
   gap: 0.65rem;
   margin-bottom: 0.75rem;
+}
+
+.section-card__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .section-card__title-block {
@@ -321,7 +327,7 @@ textarea:focus-visible,
 }
 
 .app-shell--left-hidden {
-  grid-template-columns: 0 minmax(0, 1fr) 320px;
+  grid-template-columns: 0 minmax(0, 1fr) 350px;
 }
 
 .app-shell--right-hidden {
@@ -618,6 +624,96 @@ textarea:focus-visible,
 .database-settings-grid {
   display: grid;
   gap: 0.85rem;
+}
+
+.database-documents {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-soft);
+  margin-top: 0.7rem;
+}
+
+.database-documents__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.database-documents__copy {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.database-documents__title {
+  font-weight: 700;
+}
+
+.database-documents__hint,
+.database-document-card__meta,
+.database-document-card__count {
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.database-documents .button > svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.database-document-list {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.database-document-list__item {
+  min-width: 0;
+}
+
+.database-document-card {
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.72rem 0.76rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.database-document-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.database-document-card__title-wrap {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.database-document-card__icon {
+  flex: 0 0 auto;
+  width: 1rem;
+  height: 1rem;
+  color: var(--accent);
+}
+
+.database-document-card__title {
+  min-width: 0;
+  font-size: 0.84rem;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-header {
@@ -931,8 +1027,10 @@ textarea:focus-visible,
 }
 
 .model-settings-button {
-  width: 2rem;
-  height: 2rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  margin-top: -0.25rem;
+  margin-right: -0.25rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -958,6 +1056,14 @@ textarea:focus-visible,
   color: var(--text);
   background: #fff;
   border-color: var(--border-strong);
+}
+
+.section-card__actions .model-settings-button {
+  margin-right: 0;
+}
+
+.section-card__actions .model-settings-button:last-child {
+  margin-right: -0.25rem;
 }
 
 .model-settings-page {

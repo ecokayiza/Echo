@@ -10,24 +10,24 @@ function normalizeBoolean(value: boolean | null | undefined) {
   return typeof value === "boolean" ? value : null;
 }
 
-export function createEmptyChatModel(index: number): ChatModelConfig {
+export function createEmptyChatModel(index: number, initial?: Partial<ChatModelConfig>): ChatModelConfig {
   return {
-    name: `Chat Model ${index}`,
-    model: null,
-    api_key: null,
-    base_url: null,
-    temperature: 1,
-    top_p: null,
-    enable_thinking: false,
+    name: initial?.name ?? `Chat Model ${index}`,
+    model: initial?.model ?? null,
+    api_key: initial?.api_key ?? null,
+    base_url: initial?.base_url ?? null,
+    temperature: initial?.temperature ?? 1,
+    top_p: initial?.top_p ?? null,
+    enable_thinking: initial?.enable_thinking ?? false,
   };
 }
 
-export function createEmptyEmbeddingModel(index: number): EmbeddingModelConfig {
+export function createEmptyEmbeddingModel(index: number, initial?: Partial<EmbeddingModelConfig>): EmbeddingModelConfig {
   return {
-    name: `Embedding Model ${index}`,
-    model: null,
-    api_key: null,
-    base_url: null,
+    name: initial?.name ?? `Embedding Model ${index}`,
+    model: initial?.model ?? null,
+    api_key: initial?.api_key ?? null,
+    base_url: initial?.base_url ?? null,
   };
 }
 

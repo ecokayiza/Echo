@@ -16,8 +16,11 @@ Search the public web for fresh or external information that is unlikely to exis
 - The current context already contains enough evidence to answer.
 - You would just repeat the same search without a sharper query.
 
-## Inputs
+## Examples
+- `web_search("Eco")`
+- `web_search(["Eco project", "Eco person"])`
 
+## Input
 - `query`: the web query in natural language.
 - `max_results`: optional result count. Prefer `3` to `5`; keep it small.
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 from uuid import uuid4
 
 from ..skills.manager import extract_requested_skill
@@ -31,6 +31,7 @@ class WorkflowRetrieveCall(TypedDict):
 
     name: str
     args: dict[str, Any]
+    tool_call_id: NotRequired[str]
 
 
 class WorkflowMemoryMessage(TypedDict):
@@ -38,6 +39,8 @@ class WorkflowMemoryMessage(TypedDict):
 
     role: str
     content: str
+    tool_calls: NotRequired[list[dict[str, Any]]]
+    tool_call_id: NotRequired[str]
 
 
 class WorkflowState(TypedDict, total=False):
@@ -50,6 +53,7 @@ class WorkflowState(TypedDict, total=False):
     retrieve_round: int
     pending_retrieve: WorkflowRetrieveCall | None
     prepared_answer: str
+    streamed_answer: str
     workflow_memory: list[WorkflowMemoryMessage]
 
 
@@ -70,6 +74,7 @@ def new_state(
         "retrieve_round": 0,
         "pending_retrieve": None,
         "prepared_answer": "",
+        "streamed_answer": "",
         "workflow_memory": base_context,
     }
 
@@ -80,7 +85,14 @@ def _normalize_memory(messages: list[dict[str, Any]] | None) -> list[WorkflowMem
     for item in messages or []:
         role = str(item.get("role", "")).strip()
         content = str(item.get("content", "")).strip()
-        if role not in {"system", "user", "assistant"} or not content:
+        if role not in {"system", "user", "assistant", "tool"} or not content:
             continue
-        normalized.append({"role": role, "content": content})
+        payload: WorkflowMemoryMessage = {"role": role, "content": content}
+        tool_calls = item.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            payload["tool_calls"] = [dict(entry) for entry in tool_calls if isinstance(entry, dict)]
+        tool_call_id = str(item.get("tool_call_id", "")).strip()
+        if role == "tool" and tool_call_id:
+            payload["tool_call_id"] = tool_call_id
+        normalized.append(payload)
     return normalized

@@ -154,7 +154,7 @@
 {
   "node": "plan",
   "status": "completed",
-  "detail": "retrieve"
+  "detail": "Will retrieve more context."
 }
 ```
 
@@ -178,10 +178,10 @@
   "status": "completed",
   "active_node": null,
   "node_statuses": [
-    { "node": "plan", "status": "completed", "detail": "retrieve" },
+    { "node": "plan", "status": "completed", "detail": "Will retrieve more context." },
     { "node": "retrieve", "status": "completed", "detail": null },
     { "node": "tool", "status": "completed", "detail": "web_search" },
-    { "node": "think", "status": "completed", "detail": "answer" },
+    { "node": "think", "status": "completed", "detail": "Answer is ready." },
     { "node": "answer", "status": "completed", "detail": null }
   ],
   "logs": [],
@@ -469,6 +469,7 @@ Embedding provider 本身不属于 `apps/web <-> apps/api` 契约。
 前端依赖以下事件：
 
 - `workflow`
+- `record`
 - `chunk`
 - `done`
 - `error`
@@ -505,3 +506,14 @@ payload 示例：
   "detail": "Chat request failed: Missing API key."
 }
 ```
+
+### `record`
+
+payload：
+
+- `MessageRecord`
+
+语义：
+
+- live `plan / tool / think` 更新
+- pending answer card 用它来流式更新 `Thoughts`

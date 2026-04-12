@@ -6,8 +6,11 @@ Search the local Eco_RAG vector database for semantically relevant chunks.
 
 ## When To Use
 
-- The user is asking about project knowledge, indexed files, stored documentation, or past imported content.
+- The user is asking about indexed files, stored documentation, like papers.
 - You need grounded local evidence before answering.
+
+## Example
+- `database_search("workflow graph", top_k=4)`
 
 ## Inputs
 

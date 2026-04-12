@@ -26,14 +26,29 @@ export function MessageList({
   const workflowMessagesByTurn = new Map<string, MessageRecord[]>();
   const visibleMessages: MessageRecord[] = [];
 
-  for (const message of messages) {
+for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
     if (message.role === "system") {
       continue;
     }
-    if (["plan", "think", "tool"].includes(message.message_type ?? "") && message.workflow_turn_id) {
+    if (message.workflow_turn_id) {
       const items = workflowMessagesByTurn.get(message.workflow_turn_id) ?? [];
       items.push(message);
       workflowMessagesByTurn.set(message.workflow_turn_id, items);
+
+      // Only display the final assistant record (which generated the answer)
+      let isLastAssistantInTurn = true;
+      for (let j = i + 1; j < messages.length; j++) {
+        if (messages[j].workflow_turn_id !== message.workflow_turn_id) break;
+        if (messages[j].role === "assistant") {
+          isLastAssistantInTurn = false;
+          break;
+        }
+      }
+
+      if (message.role === "assistant" && isLastAssistantInTurn) {
+        visibleMessages.push(message);
+      }
       continue;
     }
     visibleMessages.push(message);

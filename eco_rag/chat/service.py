@@ -110,40 +110,38 @@ class ChatService:
             await messages.apply("system_prompt", content=system_prompt)
 
         user_message = messages.append("user", cleaned_message, message_type="user")
+
         workflow_result: dict[str, Any] | None = None
         workflow_snapshot: dict[str, Any] | None = None
 
-        async for item in self._workflow().stream_chat(
-            cleaned_message,
-            context=messages.build_context(),
-            session_id=session_id,
-            user_message_id=user_message.id,
-        ):
-            if item["event"] == "chunk":
-                yield item
-                continue
-            if item["event"] == "state":
-                workflow_snapshot = item["data"]
-                yield {"event": "workflow", "data": workflow_snapshot}
-                continue
-            if item["event"] == "record":
-                yield item
-                continue
-            workflow_result = item["data"]
-            workflow_snapshot = workflow_result["snapshot"]
+        try:
+            async for item in self._workflow().stream_chat(
+                cleaned_message,
+                context=messages.build_context(),
+                workflow_turn_id=user_message.id,
+            ):
+                if item["event"] == "chunk":
+                    yield item
+                    continue
+                if item["event"] == "state":
+                    workflow_snapshot = item["data"]
+                    yield {"event": "workflow", "data": workflow_snapshot}
+                    continue
+                if item["event"] == "record":
+                    yield item
+                    continue
+                workflow_result = item["data"]
+                workflow_snapshot = workflow_result["snapshot"]
+        except Exception:
+            await self.delete_message(session_id, user_message.id)
+            raise
 
         if workflow_result is None or workflow_snapshot is None:
+            await self.delete_message(session_id, user_message.id)
             raise ValueError("Workflow stream ended without a final result.")
 
-        self._append_workflow_records(messages, workflow_result["records"])
+        self._append_workflow_records(messages, workflow_result["records"], workflow_result.get("token_usage"))
         reply = self._reply(workflow_snapshot["answer"])
-        messages.append(
-            "assistant",
-            reply,
-            message_type="answer",
-            workflow_turn_id=workflow_snapshot.get("workflow_turn_id"),
-            token_usage=workflow_result.get("token_usage"),
-        )
         self._sync_inferred_title(sessions, messages, previous_first_user)
 
         result = ChatResult(
@@ -206,8 +204,7 @@ class ChatService:
         async for item in self._workflow().stream_chat(
             question,
             context=messages.build_context(),
-            session_id=session_id,
-            user_message_id=user_message_id,
+            workflow_turn_id=user_message_id,
         ):
             if item["event"] == "chunk":
                 yield item
@@ -225,15 +222,8 @@ class ChatService:
         if workflow_result is None or workflow_snapshot is None:
             raise ValueError("Workflow stream ended without a final result.")
 
-        self._append_workflow_records(messages, workflow_result["records"])
+        self._append_workflow_records(messages, workflow_result["records"], workflow_result.get("token_usage"))
         reply = self._reply(workflow_snapshot["answer"])
-        messages.append(
-            "assistant",
-            reply,
-            message_type="answer",
-            workflow_turn_id=workflow_snapshot.get("workflow_turn_id"),
-            token_usage=workflow_result.get("token_usage"),
-        )
         self._sync_inferred_title(sessions, messages, previous_first_user)
 
         result = ChatResult(
@@ -273,9 +263,10 @@ class ChatService:
         return WorkflowService(model_factory=self.model_factory, tool_runner=self.tool_runner)
 
     @staticmethod
-    def _append_workflow_records(messages: Messages, records: list[dict[str, Any]]):
+    def _append_workflow_records(messages: Messages, records: list[dict[str, Any]], total_usage: dict[str, Any] | None = None):
+        last_added_assistant_msg_id = None
         for record in records:
-            messages.append(
+            msg = messages.append(
                 str(record.get("role") or "assistant"),
                 str(record.get("content") or ""),
                 message_type=str(record.get("message_type") or "") or None,
@@ -283,6 +274,22 @@ class ChatService:
                 tool_name=str(record.get("tool_name") or "") or None,
                 token_usage=record.get("token_usage") if isinstance(record.get("token_usage"), dict) else None,
             )
+            if msg.role == "assistant":
+                last_added_assistant_msg_id = msg.id
+
+        if total_usage and last_added_assistant_msg_id:
+            # We must apply the total token usage to the last assistant message (e.g. "plan" or "think").
+            # The ContextManager only permits updating content/system_prompt, not token_usage directly.
+            # So we will fetch the raw session dict, update it, and persist it.
+            session = messages.sessions.get()
+            for msg in reversed(session["messages"]):
+                if getattr(msg, "id", msg.get("id") if isinstance(msg, dict) else None) == last_added_assistant_msg_id:
+                    if isinstance(msg, dict):
+                        msg["token_usage"] = total_usage
+                    else:
+                        msg.token_usage = total_usage
+                    break
+            messages.sessions.persist(session)
 
     def default_system_prompt(self) -> str:
         """Render the default session-level system prompt."""

@@ -1,4 +1,5 @@
 import type {
+  DatabaseDocumentRecord,
   DatabaseState,
   HealthResponse,
   MetaResponse,
@@ -61,6 +62,19 @@ export const api = {
     return requestJson<DatabaseState>(`/api/databases/${encodeURIComponent(databaseId)}`, {
       method: "DELETE",
     });
+  },
+  uploadDatabaseDocuments(databaseId: string, files: File[]) {
+    const formData = new FormData();
+    files.forEach((file) => {
+      formData.append("files", file);
+    });
+    return requestJson<DatabaseState>(`/api/databases/${encodeURIComponent(databaseId)}/documents`, {
+      method: "POST",
+      body: formData,
+    });
+  },
+  listDatabaseDocuments(databaseId: string) {
+    return requestJson<DatabaseDocumentRecord[]>(`/api/databases/${encodeURIComponent(databaseId)}/documents`);
   },
   listSessions() {
     return requestJson<SessionSummary[]>("/api/sessions");

@@ -46,7 +46,14 @@ export function MessageCard({
   const usageLabel = formatTokenUsage(message.token_usage);
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
-  const isReadOnly = ["plan", "think", "tool"].includes(message.message_type ?? "");
+  const workflowAnswer =
+    isAssistant && ["plan", "think"].includes(message.message_type ?? "")
+      ? extractWorkflowBlock(message.content, "answer")
+      : "";
+  const displayContent = workflowAnswer || message.content;
+  const isWorkflowAnswerProxy = Boolean(workflowAnswer);
+  const isReadOnly =
+    message.role === "tool" || (["plan", "think"].includes(message.message_type ?? "") && !isWorkflowAnswerProxy);
   const canCopy = isAssistant || message.role === "tool";
   const thoughtEntries = buildThoughtEntries(message, workflowMessages);
 
@@ -76,7 +83,7 @@ export function MessageCard({
 
   async function handleCopy() {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(displayContent);
     } catch {}
   }
 
@@ -230,9 +237,9 @@ export function MessageCard({
             }
             if (event.key === "Escape") {
               event.preventDefault();
-              event.currentTarget.innerText = message.content;
+              event.currentTarget.innerText = displayContent as string;
               setEditing(false);
-              setDraft(message.content);
+              setDraft(displayContent as string);
             }
           }}
           ref={(el) => {
@@ -256,7 +263,7 @@ export function MessageCard({
             margin: editing ? "0" : undefined,
           }}
         >
-          {message.content}
+          {displayContent}
         </div>
 
         {totalTokenLabel || !message.pending ? (
@@ -285,7 +292,7 @@ function buildThoughtEntries(message: MessageRecord, workflowMessages: MessageRe
   if (message.pending) {
     return workflowMessages.length > 0 ? buildWorkflowMessageThoughtEntries(workflowMessages) : buildLiveThoughtEntries(message.workflow);
   }
-  if (message.role !== "assistant" || message.message_type !== "answer") {
+  if (message.role !== "assistant" || !["answer", "plan", "think"].includes(message.message_type ?? "")) {
     return [];
   }
   return buildWorkflowMessageThoughtEntries(workflowMessages);

@@ -2,12 +2,7 @@
 
 这个目录是 Eco_RAG 的 React 前端。
 
-它不自己推理 workflow，只消费后端返回的：
-
-- session history
-- live workflow snapshot
-- SSE `chunk`
-- database state
+它不自己决定 workflow，只消费后端提供的 session history、SSE 事件和 database state。
 
 ## 技术栈
 
@@ -20,112 +15,93 @@
 ## 前端负责什么
 
 - 渲染聊天工作台
-- 管理 session 列表与当前会话
-- 管理 database 列表与当前激活库
+- 管理 session 列表和当前会话
+- 管理 database 列表和 active database
 - 发送消息、重生成、编辑、删除、回滚
-- 渲染 live workflow 面板
-- 把同轮 `plan / tool / think` 重建到最终 answer 的 `Thoughts`
-- 展示模型设置与数据库设置界面
+- 渲染 live workflow panel
+- 在最终 answer 里重建 `Thoughts`
+- 管理 model settings 和 database settings UI
 
 前端不负责：
 
 - workflow 决策
 - tool 执行
-- embedding 生成
+- embedding 推理
 - 向量检索逻辑
-- skill 选择
-- session 底层持久化
+- session 持久化
 
-## 当前依赖的 workflow 语义
+## 当前流式交互
 
-前端依赖后端固定节点顺序：
+发送消息后，前端会同时消费三类关键流：
 
-- `plan`
-- `retrieve`
-- `tool`
-- `think`
-- `answer`
+- `workflow`
+  - 更新右侧 live workflow panel
+- `record`
+  - 把当前回合的 `plan / tool / think` 追加进 pending answer 的 `Thoughts`
+- `chunk`
+  - 增量更新最终 answer 文本
 
-最重要的 live snapshot 字段：
+完成时：
 
-- `workflow_turn_id`
-- `query`
-- `answer`
-- `status`
-- `active_node`
-- `node_statuses`
-- `logs`
-- `errors`
+- `done` 会返回已持久化的最终 session state
+- 本地 pending UI 会被真实持久化消息替换
 
-历史消息里会包含：
+## 聊天区渲染规则
 
-- assistant `plan`
-- tool `tool`
-- assistant `think`
-- assistant `answer`
+主聊天流只显示：
 
-但主聊天流的渲染规则是：
+- `user`
+- 最终 assistant `answer`
 
-- 隐藏原始 `plan / think / tool` 气泡
-- 只显示最终 `answer`
-- 在这个 `answer` 卡片里，用同轮消息重建 `Thoughts`
+不会单独显示：
 
-`Thoughts` 只显示：
+- `system`
+- 原始 `plan`
+- 原始 `think`
+- 原始 `tool`
+
+这些内部消息会按 `workflow_turn_id` 归组，然后显示到最终 answer card 的 `Thoughts` 中。
+
+`Thoughts` 会显示：
 
 - `plan` 的 reasoning block
 - `think` 的 reasoning block
 - tool 结果
 
-不会显示：
+`Thoughts` 不会显示：
 
-- `[next]`
-- 原始嵌入式 `[answer]`
+- 内嵌的 `[answer]`
 - `tool_back`
 - routine workflow log spam
 
-## 数据库面板
+## Workflow 面板
 
-左侧栏在 session 列表下方有数据库面板：
+右侧 `Workflow` 面板是 live 状态面板：
+
+- 显示 `plan -> retrieve -> tool -> think -> answer` graph
+- 中间 `tool` 节点会显示当前工具名
+- 默认标签为 `</>`
+- 下方 `Logs` 展示 workflow step detail 和高信号日志
+
+历史流程回放不依赖这个面板，而是来自 answer card 里的 `Thoughts`。
+
+## Database 面板
+
+Session 列表下方有 database 面板：
 
 - 选择 active database
-- 显示当前库的文档数
-- 显示当前库绑定的 embedding model
-- 点击配置图标打开 database settings modal
+- 显示数据库文档数
+- 显示绑定的 embedding model
+- 点击配置图标打开 database settings
 
-当前 database settings modal 已支持：
+当前 database settings 已支持：
 
-- 创建数据库
-- 选择数据库
-- 重命名数据库
-- 删除数据库
+- 创建 database
+- 选择 database
+- 重命名 database
+- 删除 database
 
-后续内容管理和更细的数据库参数会继续放在这个区域扩展。
-
-## 主交互流
-
-发送消息时：
-
-1. `MessageComposer` 触发发送
-2. `useChatWorkspace` 调用流式接口
-3. `readEventStream(...)` 消费 SSE
-4. `workflow` 事件更新右侧 live workflow 面板
-5. `chunk` 事件更新 pending answer
-6. `done` 事件用后端返回的已持久化 session 状态覆盖本地状态
-
-## 会话恢复语义
-
-前端恢复 workflow 的来源分成两部分：
-
-1. live 运行时
-   - 来自 SSE 的 `workflow` snapshot
-2. 历史回放
-   - 来自 session messages 里的 `plan / tool / think / answer`
-
-也就是说：
-
-- 右侧 workflow panel 是 live 状态面板
-- 历史上的流程回放由 answer card 的 `Thoughts` 负责
-- 不再依赖持久化到 answer message 上的 workflow snapshot
+后续内容管理和更多 database 配置会继续扩展在这里。
 
 ## 关键目录
 
@@ -136,17 +112,12 @@
 面板组件：
 
 - `src/components/panels/`
-  - `WorkflowPanel.tsx`
-  - `WorkflowGraph.tsx`
-  - `ModelSettingsPanel.tsx`
-  - `DatabasePanel.tsx`
-  - `DatabaseSettingsModal.tsx`
 
 状态与副作用：
 
 - `src/hooks/useChatWorkspace.ts`
 
-数据适配与网络：
+网络与适配：
 
 - `src/lib/api.ts`
 - `src/lib/sse.ts`
@@ -177,6 +148,6 @@ npm run dev
 npm run build
 ```
 
-完整接口契约：
+接口契约可参考：
 
 - [apps/Contract.md](../Contract.md)

@@ -1,116 +1,115 @@
 # Eco_RAG
 
-Eco_RAG 是一个以聊天为唯一主入口的 LLM 应用。系统核心不是固定的“检索增强问答”流水线，而是一条用 LangGraph 编排的可观察 workflow：模型先规划路线，再按需注入 skills、调用 tools、反思是否继续检索，最后输出答案。
+Eco_RAG 是一个以聊天为主入口的可观察 LLM workspace。它不是“固定模板式 RAG”，而是一条由 LangGraph 控制的决策 workflow：模型先 `plan`，按需 `retrieve`，统一通过 `tool` 执行动作，再 `think` 是否继续，最后输出 `answer`。
 
 ## 当前架构
 
 - 后端：FastAPI
 - 前端：React + TypeScript + Vite
-- 聊天持久化：磁盘 session / message JSON
-- 编排层：LangGraph workflow
-- 检索与动作层：`eco_rag/tools/`
-- 技能目录与文档：`eco_rag/skills/`
+- 编排层：LangGraph
+- 聊天持久化：磁盘 session JSON
+- 检索工具：`eco_rag/tools/`
+- skills 文档：`eco_rag/skills/`
+- 向量库：按 database 管理，和 embedding model 一一配对
 
-## 当前 workflow
+## 当前 Workflow
 
-真实流程已经重构为：
+固定节点：
 
-- `START -> plan`
-- 快路径：`plan -> answer -> END`
-- 多跳路径：`plan -> inject_skills -> retrieve -> think -> answer -> END`
+- `plan`
+- `retrieve`
+- `tool`
+- `think`
+- `answer`
 
-多跳路径里的细节：
+关键规则：
 
-- `inject_skills` 会在进入 retrieve 前注入 `eco_rag/skills/skills.md`
-- `retrieve` 由模型输出 JSON 指令决定是否调用工具
-- 如果 `retrieve` 选择 `load_skill`，会回到 `retrieve`，且只允许一次额外 skill load
-- 如果 `retrieve` 选择搜索类工具，例如 `database_search` 或 `web_search`，工具结果会写入 `context_items`，然后进入 `think`
-- `think` 会输出 `conclusion / update_plan / self_reflection / next_step`
-- 如果 `think` 认为还缺信息，可以再回到 `retrieve`，但有次数上限
+- `plan` 和 `think` 是唯一会调用模型的决策节点
+- `retrieve` 和 `answer` 是内部控制节点，不单独落盘聊天回复
+- `tool` 统一执行 `load_skill`、`database_search`、`web_search`
+- 运行时 memory 是一条 flat transcript，会把完整 `plan / tool / think` 串起来
+- workflow 结束后，只把真实消息写入 session history
 
-详细说明见：
+## Streaming 体验
 
-- [eco_rag/workflow/README.md](./eco_rag/workflow/README.md)
+Web UI 现在区分两条流：
 
-## Skills 与 Tools
+- `record`
+  - 实时推送内部 `plan / tool / think` 记录
+  - 用来驱动 answer card 里的 `Thoughts`
+- `chunk`
+  - 实时推送最终 `answer`
+  - Web UI 会边收边更新最终回复正文
 
-当前约定很简单：
+右侧 `Workflow` 面板显示 live graph 和 logs；历史回放则来自同轮持久化的 `plan / tool / think / answer` 消息，不依赖额外 snapshot 落盘。
 
-- 具体工具实现放在 `eco_rag/tools/`
-- 具体 skill 文档放在 `eco_rag/skills/`
-- `skills.md` 只放 skill 列表和大致说明
-- skill 正文按需加载，不一次性塞进 prompt
+## RAG 与 Embedding
 
-默认检索相关能力包括：
+当前 RAG 约束很明确：
 
-- `database_search`
-- `web_search`
-- `load_skill`
+- 一个 database 只绑定一个 embedding model
+- 该 database 的入库和检索都必须使用这同一个 embedding model
+- embedding model 在本项目里一律视为外部 OpenAI 兼容 API
+- 配置来源只有 `models.json`
 
-如果外部还传入旧式 `tool_runner`，系统会自动包成兼容工具 `legacy_search`。
+这意味着：
 
-## 上下文与持久化
+- 本项目只负责数据准备、发 API 请求、保存向量库、执行检索
+- 不在 `eco_rag/` 里托管 embedding 推理服务
+- 如果你部署了本地 embedding 服务，只需要把它当成外部 provider 写进 `models.json`
 
-这里有一条很重要的边界：
+## 持久化与上下文
 
-- 只有 `context_manager` 管理并落盘的聊天消息，会作为下一轮的长期上下文
-- 一轮 workflow 内的额外上下文，例如 `context_items`、节点 JSON 输出、trace、tool result summary，会一起落到 assistant message 的 `workflow` 字段里
-- 这些 workflow 元数据会被 UI 用来回放过程，但不会通过 `build_context()` 回灌给下一轮模型
+长期记忆只有 session history：
 
-也就是说：
+- `memory/chat_sessions/`
 
-- chat history 是长期记忆
-- workflow snapshot 是本轮过程记录
+live workflow 恢复草稿单独存放：
 
-## 目录结构
+- `memory/workflow_live/`
+
+下一轮上下文构建规则：
+
+- 保留顶部唯一 system prompt
+- 排除 `tool`
+- 同一 `workflow_turn_id` 只保留一条 assistant 推理消息
+- 优先最后一条 `think`
+- 没有 `think` 时回退到 `plan`
+- 同轮 `answer` 不再重复灌回下一轮 context
+
+## 目录
 
 ```text
 Eco_RAG/
-├── eco_rag/
-│   ├── chat/                  # session、message、模型调用、聊天服务
-│   ├── workflow/              # LangGraph 图、状态、节点、追踪、提示词模板
-│   ├── tools/                 # retrieve 阶段的工具
-│   ├── skills/                # skills.md 与具体 skill 文档
-│   ├── indexing/              # embedding / vector DB 支撑
-│   ├── domain/                # 共享领域结构
-│   └── config.py
 ├── apps/
-│   ├── api/
-│   ├── web/
-│   └── Contract.md
+│   ├── api/                  # FastAPI backend
+│   ├── desktop/              # reserved shell
+│   └── web/                  # React frontend
+├── db/                       # vector database files
+├── eco_rag/
+│   ├── chat/                 # sessions, messages, chat service
+│   ├── domain/               # shared schemas
+│   ├── indexing/             # vector DB + embedding client integration
+│   ├── skills/               # skills catalog and docs
+│   ├── tools/                # retrieve tools
+│   └── workflow/             # LangGraph graph, nodes, prompts, tracker
 ├── memory/
-│   └── chat_sessions/
+│   ├── chat_sessions/        # persisted sessions
+│   └── workflow_live/        # resumable live workflow drafts
 ├── tests/
-├── models.json
-└── pyproject.toml
+├── databases.json            # database registry and active selection
+├── models.json               # chat / embedding provider settings
+├── settings.json             # runtime workflow settings
+└── run.py
 ```
 
-## 主链路
-
-一次聊天的真实调用顺序：
-
-1. 前端调用 `POST /api/sessions/{session_id}/messages/stream`
-2. `ChatService` 先写入 user message
-3. `Messages.build_context()` 只提取长期聊天上下文
-4. `WorkflowService` 构建本轮 LangGraph workflow
-5. workflow 运行 `plan / inject_skills / retrieve / think / answer`
-6. 后端持续推送 `workflow` 和 `chunk`
-7. 完成后把 assistant message 和完整 workflow snapshot 一起落盘
-
-## 运行
+## 快速开始
 
 安装依赖：
 
 ```bash
+conda activate llm
 python -m pip install -e .
-```
-
-前端开发：
-
-```bash
-cd apps/web
-npm install
-npm run dev
 ```
 
 启动后端：
@@ -119,7 +118,15 @@ npm run dev
 python -m uvicorn apps.api.app.main:app --reload
 ```
 
-Windows 上如果脚本路径解析不稳定，也可以直接运行：
+启动前端：
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+Windows 上也可以直接：
 
 ```bash
 python run.py
@@ -127,7 +134,7 @@ python run.py
 
 ## 文档索引
 
-- [eco_rag/workflow/README.md](./eco_rag/workflow/README.md)
 - [apps/api/README.md](./apps/api/README.md)
 - [apps/web/README.md](./apps/web/README.md)
-- [apps/Contract.md](./apps/Contract.md)
+- [eco_rag/workflow/README.md](./eco_rag/workflow/README.md)
+- [memory/README.md](./memory/README.md)

@@ -24,6 +24,7 @@ import type {
   ChatModelConfig,
   ChatResponse,
   ConfirmDialogState,
+  DatabaseDocumentRecord,
   DatabaseRecord,
   DatabaseState,
   EmbeddingModelConfig,
@@ -45,6 +46,7 @@ interface WorkspaceState {
   meta: MetaResponse | null;
   sessions: SessionSummary[];
   databases: DatabaseRecord[];
+  databaseDocuments: DatabaseDocumentRecord[];
   activeDatabaseId: string | null;
   sessionId: string | null;
   messages: MessageRecord[];
@@ -60,6 +62,7 @@ type Action =
   | { type: "busy"; busy: boolean; label?: string }
   | { type: "status"; text: string; tone?: StatusTone; liveLabel?: string }
   | { type: "databases:set"; payload: DatabaseState }
+  | { type: "database-documents:set"; documents: DatabaseDocumentRecord[] }
   | { type: "sessions:set"; sessions: SessionSummary[] }
   | { type: "session:select"; sessionId: string | null }
   | { type: "session:summary"; session: SessionSummary }
@@ -75,6 +78,7 @@ const initialState: WorkspaceState = {
   meta: null,
   sessions: [],
   databases: [],
+  databaseDocuments: [],
   activeDatabaseId: null,
   sessionId: null,
   messages: [],
@@ -121,6 +125,11 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         ...state,
         databases: action.payload.databases,
         activeDatabaseId: action.payload.active_database_id,
+      };
+    case "database-documents:set":
+      return {
+        ...state,
+        databaseDocuments: action.documents,
       };
     case "session:select":
       return {
@@ -195,7 +204,10 @@ function normalizeLiveWorkflowRecord(
       : options.fallbackTurnId ?? null;
 
   return {
-    id: `pending-record-${options.index}`,
+    id:
+      typeof record.id === "string" && record.id.trim()
+        ? record.id
+        : `pending-record-${options.index}`,
     role: role as MessageRecord["role"],
     content,
     message_type: typeof record.message_type === "string" ? record.message_type : null,
@@ -206,6 +218,14 @@ function normalizeLiveWorkflowRecord(
         ? (record.token_usage as MessageRecord["token_usage"])
         : null,
   };
+}
+
+function upsertLiveWorkflowRecord(records: MessageRecord[], nextRecord: MessageRecord) {
+  const existingIndex = records.findIndex((item) => item.id === nextRecord.id);
+  if (existingIndex < 0) {
+    return [...records, nextRecord];
+  }
+  return replaceAtIndex(records, existingIndex, nextRecord);
 }
 
 function buildPendingSendMessages(
@@ -277,6 +297,7 @@ export function useChatWorkspace() {
     })
   );
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  const [embeddingModelSettingsOpen, setEmbeddingModelSettingsOpen] = useState(false);
   const [databaseSettingsOpen, setDatabaseSettingsOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -317,8 +338,11 @@ export function useChatWorkspace() {
           return;
         }
 
+        await syncDatabaseState(databaseState);
+        if (cancelled) {
+          return;
+        }
         startTransition(() => {
-          dispatch({ type: "databases:set", payload: databaseState });
           dispatch({ type: "sessions:set", sessions });
         });
 
@@ -455,12 +479,18 @@ export function useChatWorkspace() {
     return payload;
   }
 
-  async function refreshDatabaseState() {
-    const payload = await api.listDatabases();
+  async function syncDatabaseState(payload: DatabaseState) {
+    const documents = payload.active_database_id ? await api.listDatabaseDocuments(payload.active_database_id) : [];
     startTransition(() => {
       dispatch({ type: "databases:set", payload });
+      dispatch({ type: "database-documents:set", documents });
     });
     return payload;
+  }
+
+  async function refreshDatabaseState() {
+    const payload = await api.listDatabases();
+    return syncDatabaseState(payload);
   }
 
   async function selectSession(sessionId: string) {
@@ -582,20 +612,20 @@ export function useChatWorkspace() {
     });
   }
 
-  function addChatModel() {
+  function addChatModel(initial?: Partial<ChatModelConfig>) {
     setModelSettingsDraft((current) =>
       normalizeModelSettingsDocument({
         ...current,
-        chat_models: [...current.chat_models, createEmptyChatModel(current.chat_models.length + 1)],
+        chat_models: [...current.chat_models, createEmptyChatModel(current.chat_models.length + 1, initial)],
       })
     );
   }
 
-  function addEmbeddingModel() {
+  function addEmbeddingModel(initial?: Partial<EmbeddingModelConfig>) {
     setModelSettingsDraft((current) =>
       normalizeModelSettingsDocument({
         ...current,
-        embedding_models: [...current.embedding_models, createEmptyEmbeddingModel(current.embedding_models.length + 1)],
+        embedding_models: [...current.embedding_models, createEmptyEmbeddingModel(current.embedding_models.length + 1, initial)],
       })
     );
   }
@@ -628,6 +658,16 @@ export function useChatWorkspace() {
     setModelSettingsOpen(false);
   }
 
+  function openEmbeddingModelSettings() {
+    setModelSettingsDraft(modelSettings);
+    setEmbeddingModelSettingsOpen(true);
+  }
+
+  function closeEmbeddingModelSettings() {
+    setModelSettingsDraft(modelSettings);
+    setEmbeddingModelSettingsOpen(false);
+  }
+
   function openDatabaseSettings() {
     setDatabaseSettingsOpen(true);
   }
@@ -657,13 +697,35 @@ export function useChatWorkspace() {
     );
   }
 
-  async function saveModelSettings() {
+  async function saveModelSettings(updatedSettings?: ModelSettingsDocument) {
+    const dataToSave = updatedSettings ?? modelSettingsDraft;
     await withBusy(
       "Saving model settings...",
       async () => {
-        await persistModelSettings(modelSettingsDraft);
+        await persistModelSettings(dataToSave);
+        if (updatedSettings) {
+          setModelSettingsDraft(dataToSave);
+        }
         setModelSettingsOpen(false);
         dispatch({ type: "status", text: "Model settings saved.", tone: "success", liveLabel: "Ready" });
+      },
+      async (detail) => {
+        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
+      }
+    );
+  }
+
+  async function saveEmbeddingModelSettings(updatedSettings?: ModelSettingsDocument) {
+    const dataToSave = updatedSettings ?? modelSettingsDraft;
+    await withBusy(
+      "Saving embedding model settings...",
+      async () => {
+        await persistModelSettings(dataToSave);
+        if (updatedSettings) {
+          setModelSettingsDraft(dataToSave);
+        }
+        setEmbeddingModelSettingsOpen(false);
+        dispatch({ type: "status", text: "Embedding model settings saved.", tone: "success", liveLabel: "Ready" });
       },
       async (detail) => {
         dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
@@ -679,8 +741,8 @@ export function useChatWorkspace() {
     await withBusy(
       "Selecting database...",
       async () => {
-        await api.selectDatabase(databaseId);
-        await refreshDatabaseState();
+        const payload = await api.selectDatabase(databaseId);
+        await syncDatabaseState(payload);
         dispatch({ type: "status", text: "Database selected.", tone: "success", liveLabel: "Ready" });
       },
       async (detail) => {
@@ -699,8 +761,8 @@ export function useChatWorkspace() {
     await withBusy(
       "Creating database...",
       async () => {
-        await api.createDatabase({ name: cleanedName, embedding_model_name: embeddingModelName });
-        await refreshDatabaseState();
+        const payload = await api.createDatabase({ name: cleanedName, embedding_model_name: embeddingModelName });
+        await syncDatabaseState(payload);
         dispatch({ type: "status", text: "Database created.", tone: "success", liveLabel: "Ready" });
       },
       async (detail) => {
@@ -719,9 +781,37 @@ export function useChatWorkspace() {
     await withBusy(
       "Renaming database...",
       async () => {
-        await api.renameDatabase(database.id, cleanedName);
-        await refreshDatabaseState();
+        const payload = await api.renameDatabase(database.id, cleanedName);
+        await syncDatabaseState(payload);
         dispatch({ type: "status", text: "Database renamed.", tone: "success", liveLabel: "Ready" });
+      },
+      async (detail) => {
+        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
+      }
+    );
+  }
+
+  async function uploadDatabaseDocuments(files: File[]) {
+    const targetDatabaseId = state.activeDatabaseId;
+    if (!targetDatabaseId) {
+      dispatch({ type: "status", text: "Select a database before uploading files.", tone: "error", liveLabel: "Error" });
+      return;
+    }
+    if (files.length === 0) {
+      return;
+    }
+
+    await withBusy(
+      files.length === 1 ? `Uploading "${files[0].name}"...` : `Uploading ${files.length} files...`,
+      async () => {
+        const payload = await api.uploadDatabaseDocuments(targetDatabaseId, files);
+        await syncDatabaseState(payload);
+        dispatch({
+          type: "status",
+          text: files.length === 1 ? `Uploaded "${files[0].name}".` : `Uploaded ${files.length} documents.`,
+          tone: "success",
+          liveLabel: "Ready",
+        });
       },
       async (detail) => {
         dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
@@ -741,8 +831,8 @@ export function useChatWorkspace() {
       tone: "danger",
       onConfirm: async () => {
         await withBusy("Deleting database...", async () => {
-          await api.deleteDatabase(database.id);
-          await refreshDatabaseState();
+          const payload = await api.deleteDatabase(database.id);
+          await syncDatabaseState(payload);
           setConfirmDialog(null);
           dispatch({ type: "status", text: "Database deleted.", tone: "success", liveLabel: "Ready" });
         });
@@ -920,7 +1010,7 @@ export function useChatWorkspace() {
                   return;
                 }
 
-                liveRecords = [...liveRecords, nextRecord];
+                liveRecords = upsertLiveWorkflowRecord(liveRecords, nextRecord);
                 startTransition(() => {
                   dispatch({
                     type: "messages:set",
@@ -984,7 +1074,7 @@ export function useChatWorkspace() {
             },
             onDone: async (payload) => {
               const response = payload as unknown as ChatResponse;
-              applySessionPayload(response, null);
+              applySessionPayload(response, response.workflow ?? currentWorkflow);
               dispatch({ type: "status", text: "Reply received.", tone: "success", liveLabel: "Ready" });
             },
           }
@@ -1055,7 +1145,7 @@ export function useChatWorkspace() {
                   return;
                 }
 
-                liveRecords = [...liveRecords, nextRecord];
+                liveRecords = upsertLiveWorkflowRecord(liveRecords, nextRecord);
                 startTransition(() => {
                   dispatch({
                     type: "messages:set",
@@ -1106,7 +1196,7 @@ export function useChatWorkspace() {
             },
             onDone: async (payload) => {
               const response = payload as unknown as ChatResponse;
-              applySessionPayload(response, null);
+              applySessionPayload(response, response.workflow ?? currentWorkflow);
               dispatch({ type: "status", text: "Message regenerated.", tone: "success", liveLabel: "Ready" });
             },
           }
@@ -1132,6 +1222,7 @@ export function useChatWorkspace() {
       activeModelName,
       modelNames: modelSettings.chat_models.map((item) => item.name),
       embeddingModelNames: modelSettings.embedding_models.map((item) => item.name),
+      databaseDocuments: state.databaseDocuments,
       totalStoredTokens,
       formatNumber,
     },
@@ -1143,6 +1234,7 @@ export function useChatWorkspace() {
       systemPromptDirty,
       modelSettingsDraft,
       modelSettingsOpen,
+      embeddingModelSettingsOpen,
       databaseSettingsOpen,
       setActiveChatModel,
       setActiveEmbeddingModel,
@@ -1167,13 +1259,17 @@ export function useChatWorkspace() {
       resetSystemPromptDraft,
       openModelSettings,
       closeModelSettings,
+      openEmbeddingModelSettings,
+      closeEmbeddingModelSettings,
       openDatabaseSettings,
       closeDatabaseSettings,
       selectActiveChatModel,
       saveModelSettings,
+      saveEmbeddingModelSettings,
       selectDatabase,
       createDatabase,
       renameDatabase,
+      uploadDatabaseDocuments,
       openDeleteDatabaseDialog,
       renameSession,
       openDeleteSessionDialog,

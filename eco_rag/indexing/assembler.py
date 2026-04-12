@@ -124,9 +124,9 @@ if __name__ == "__main__":
     embedder = OpenAICompatibleEmbedder()
     assembler = Assembler(vector_db, data_loader, chunker, embedder)
     
-    # print("Dpocument count in DB before storing file:", assembler.db.count())
-    # assembler.store_file(file_path)
-    # print("Document count in DB after storing file:", assembler.db.count())
+    print("Dpocument count in DB before storing file:", assembler.db.count())
+    assembler.store_file(file_path)
+    print("Document count in DB after storing file:", assembler.db.count())
     
     # print("Document count in DB before deleting file:", assembler.db.count())
     # assembler.delete_file(file_path)
@@ -135,10 +135,10 @@ if __name__ == "__main__":
     # results = assembler.query_file(file_path)
     # records = RAGRecord.get_records_from_results(results)
     
-    text = ["智能体采取的动作"]
-    embedding = embedder.embed(text)[0]
-    results = assembler.query_with_vector(embedding, n_results=5)
-    records = RAGRecord.get_records_from_results(results)
+    # text = ["智能体采取的动作"]
+    # embedding = embedder.embed(text)[0]
+    # results = assembler.query_with_vector(embedding, n_results=5)
+    # records = RAGRecord.get_records_from_results(results)
     
     for record in records:
         record.print()

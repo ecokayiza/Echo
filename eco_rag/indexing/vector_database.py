@@ -74,3 +74,27 @@ class VectorDatabase:
     def peek(self, limit: int = 5):
         """Peek at a few documents in the collection."""
         return self.collection.peek(limit=limit)
+
+    def list_document_summaries(self):
+        """Return one summary per stored source document."""
+        results = self.collection.get()
+        summaries: dict[str, dict[str, Any]] = {}
+        for metadata in results.get("metadatas") or []:
+            if not isinstance(metadata, dict):
+                continue
+            file_path = str(metadata.get("file_path") or "").strip() or None
+            source_name = str(metadata.get("source_name") or file_path or "Untitled").strip() or "Untitled"
+            source_type = str(metadata.get("source_type") or "unknown").strip() or "unknown"
+            key = file_path or f"{source_name}:{source_type}"
+            current = summaries.get(key)
+            if current is None:
+                summaries[key] = {
+                    "id": key,
+                    "source_name": source_name,
+                    "source_type": source_type,
+                    "file_path": file_path,
+                    "chunk_count": 1,
+                }
+                continue
+            current["chunk_count"] += 1
+        return sorted(summaries.values(), key=lambda item: (item["source_name"].lower(), item["file_path"] or ""))

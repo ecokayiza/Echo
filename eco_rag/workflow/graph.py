@@ -13,7 +13,6 @@ from .nodes import (
     route_after_retrieve,
     route_after_think,
     route_after_tool,
-    route_from_state,
     think_node,
     tool_node,
 )
@@ -28,17 +27,7 @@ def build_workflow(deps: WorkflowDependencies):
     graph.add_node(WorkflowStep.TOOL.value, partial(tool_node, deps=deps))
     graph.add_node(WorkflowStep.THINK.value, partial(think_node, deps=deps))
     graph.add_node(WorkflowStep.ANSWER.value, answer_node)
-    graph.add_conditional_edges(
-        START,
-        route_from_state,
-        {
-            WorkflowStep.PLAN.value: WorkflowStep.PLAN.value,
-            WorkflowStep.RETRIEVE.value: WorkflowStep.RETRIEVE.value,
-            WorkflowStep.TOOL.value: WorkflowStep.TOOL.value,
-            WorkflowStep.THINK.value: WorkflowStep.THINK.value,
-            WorkflowStep.ANSWER.value: WorkflowStep.ANSWER.value,
-        },
-    )
+    graph.add_edge(START, WorkflowStep.PLAN.value)
     graph.add_conditional_edges(
         WorkflowStep.PLAN.value,
         route_after_plan,

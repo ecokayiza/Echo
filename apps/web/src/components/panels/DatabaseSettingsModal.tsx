@@ -61,7 +61,7 @@ export function DatabaseSettingsModal({
       open={open}
       onClose={onClose}
       title="Database Settings"
-      description="Manage database selection and paired embedding models. Content management will land here next."
+      description="Manage database selection and paired embedding models."
       footer={
         <Button onClick={onClose} variant="ghost">
           Close

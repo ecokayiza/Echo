@@ -7,13 +7,12 @@ class Config:
     ROOT_DIR = ROOT_DIR
     MODELS_PATH = ROOT_DIR / "models.json"
     SETTINGS_PATH = ROOT_DIR / "settings.json"
+    DATABASES_PATH = ROOT_DIR / "databases.json"
     DATA_DIR = ROOT_DIR / "data"
     DB_PATH = ROOT_DIR / "db"
     MEMORY_DIR = ROOT_DIR / "memory"
-    DATABASES_PATH = MEMORY_DIR / "databases.json"
     CHAT_MEMORY_DIR = MEMORY_DIR / "chat_sessions"
     MEMORY_ARTIFACTS_DIR = MEMORY_DIR / "artifacts"
-    WORKFLOW_DRAFT_DIR = MEMORY_DIR / "workflow_live"
     TEST_FILE_PATH = DATA_DIR / "C1" / "markdown" / "easy-rl-chapter1.md"
 
     CHUNK_SIZE = 1000
@@ -26,9 +25,10 @@ class Config:
     LOCAL_EMBEDDING_API_KEY = "local-embedding-service"
 
     @staticmethod
-    def get_relative_path(file_path, data_dir=DATA_DIR):
+    def get_relative_path(file_path, data_dir=None):
+        resolved_data_dir = Path(data_dir) if data_dir is not None else Config.DATA_DIR
         try:
-            rel_path = Path(file_path).relative_to(data_dir)
+            rel_path = Path(file_path).relative_to(resolved_data_dir)
             rel_path = str(rel_path).replace("\\", "/")
         except ValueError:
             rel_path = Path(file_path).name

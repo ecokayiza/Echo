@@ -176,6 +176,11 @@ class BaseChatModel(ABC):
         enable_thinking: bool | None = None,
     ):
         """Create the shared provider client."""
+        # The OpenAI client treats base_url as the prefix to endpoints (like /chat/completions).
+        # So we want to make sure it doesn't end with /chat/completions.
+        if base_url and base_url.endswith("/chat/completions"):
+            base_url = base_url[: -len("/chat/completions")]
+            
         self.client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self.model = model
         self.temperature = temperature

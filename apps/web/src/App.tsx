@@ -5,6 +5,7 @@ import { Button, Modal } from "@/components/common";
 import {
   DatabasePanel,
   DatabaseSettingsModal,
+  EmbeddingModelSettingsModal,
   ModelSettingsModal,
   ModelSettingsPanel,
   SessionPanel,
@@ -55,7 +56,12 @@ export default function App() {
               activeDatabaseId={state.activeDatabaseId}
               busy={state.busy}
               databases={state.databases}
+              documents={workspace.databaseDocuments}
+              onOpenEmbeddingSettings={actions.openEmbeddingModelSettings}
               onOpenSettings={actions.openDatabaseSettings}
+              onUploadFiles={(files) => {
+                void actions.uploadDatabaseDocuments(files);
+              }}
               onSelect={(databaseId) => {
                 void actions.selectDatabase(databaseId);
               }}
@@ -178,6 +184,18 @@ export default function App() {
         onUpdateChatModel={drafts.updateChatModel}
         onUpdateEmbeddingModel={drafts.updateEmbeddingModel}
         open={drafts.modelSettingsOpen}
+        settings={drafts.modelSettingsDraft}
+      />
+
+      <EmbeddingModelSettingsModal
+        busy={state.busy}
+        onAddEmbeddingModel={drafts.addEmbeddingModel}
+        onChangeActiveEmbeddingModel={drafts.setActiveEmbeddingModel}
+        onClose={actions.closeEmbeddingModelSettings}
+        onRemoveEmbeddingModel={drafts.removeEmbeddingModel}
+        onSave={actions.saveEmbeddingModelSettings}
+        onUpdateEmbeddingModel={drafts.updateEmbeddingModel}
+        open={drafts.embeddingModelSettingsOpen}
         settings={drafts.modelSettingsDraft}
       />
 

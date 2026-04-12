@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, AsyncIterator, Callable
 
 from ..chat.registry import ChatModelSettings, build_chat_model
 from ..skills import list_available_skills
 from ..settings import load_app_settings
 from ..tools import build_retrieve_tools
-from .drafts import WorkflowDraftStore
 from .graph import build_workflow
 from .nodes import WorkflowDependencies
 from .prompts import default_system_prompt
@@ -23,12 +21,9 @@ class WorkflowService:
         model_factory: Callable[[ChatModelSettings | None], Any] = build_chat_model,
         *,
         tool_runner: Callable[[str], Any] | None = None,
-        draft_storage: dict[str, dict[str, Any]] | None = None,
-        draft_base_dir: str | Path | None = None,
     ):
         self.model_factory = model_factory
         self.tool_runner = tool_runner
-        self.drafts = WorkflowDraftStore(storage=draft_storage, base_dir=draft_base_dir)
 
     async def stream(
         self,
@@ -40,8 +35,6 @@ class WorkflowService:
             new_state(query, self._default_context(query)),
             tracker=None,
             records=[],
-            session_id=None,
-            user_message_id=None,
         ):
             yield item
 
@@ -50,23 +43,14 @@ class WorkflowService:
         question: str,
         *,
         context: list[dict[str, Any]] | None = None,
-        session_id: str | None = None,
-        user_message_id: str | None = None,
+        workflow_turn_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Stream workflow events for one chat turn, resuming when a live draft exists."""
+        """Stream workflow events for one chat turn from persisted session history."""
         query = self._query(question)
-        state, tracker, records = self._load_or_create_state(
-            query,
-            context=context,
-            session_id=session_id,
-            user_message_id=user_message_id,
-        )
         async for item in self._stream_state(
-            state,
-            tracker=tracker,
-            records=records,
-            session_id=session_id,
-            user_message_id=user_message_id,
+            new_state(query, self._default_context(query, context), workflow_turn_id=workflow_turn_id),
+            tracker=None,
+            records=[],
         ):
             yield item
 
@@ -105,55 +89,12 @@ class WorkflowService:
             raise ValueError("Question cannot be empty.")
         return query
 
-    def _load_or_create_state(
-        self,
-        query: str,
-        *,
-        context: list[dict[str, Any]] | None,
-        session_id: str | None,
-        user_message_id: str | None,
-    ) -> tuple[WorkflowState, WorkflowTracker, list[dict[str, Any]]]:
-        """Load a resumable draft or create a fresh workflow state."""
-        if session_id and user_message_id:
-            draft = self.drafts.load(session_id)
-            if draft is not None and draft["user_message_id"] == user_message_id:
-                state = dict(draft["state"])
-                if "workflow_memory" not in state:
-                    self.drafts.clear(session_id)
-                else:
-                    tracker = WorkflowTracker.from_snapshot(draft["snapshot"], query=state["query"])
-                    tracker.log("Workflow resumed from the saved live draft.")
-                    self.drafts.persist(
-                        session_id,
-                        user_message_id=user_message_id,
-                        state=state,
-                        snapshot=tracker.snapshot(state),
-                        records=draft["records"],
-                    )
-                    return state, tracker, list(draft["records"])
-            if draft is not None:
-                self.drafts.clear(session_id)
-
-        state = new_state(query, self._default_context(query, context), workflow_turn_id=user_message_id)
-        tracker = WorkflowTracker(state["workflow_turn_id"], state["query"])
-        if session_id and user_message_id:
-            self.drafts.persist(
-                session_id,
-                user_message_id=user_message_id,
-                state=state,
-                snapshot=tracker.snapshot(state),
-                records=[],
-            )
-        return state, tracker, []
-
     async def _stream_state(
         self,
         state: WorkflowState,
         *,
         tracker: WorkflowTracker | None,
         records: list[dict[str, Any]],
-        session_id: str | None,
-        user_message_id: str | None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Run the workflow and emit state updates, chunks, and the final result."""
         deps = self._deps()
@@ -170,9 +111,14 @@ class WorkflowService:
                         continue
                     if payload.get("event") == "chunk":
                         yield payload
+                    elif payload.get("event") == "transition" and isinstance(payload.get("data"), dict):
+                        self._apply_transition(runtime_tracker, current_state, payload["data"])
+                        yield {"event": "state", "data": runtime_tracker.snapshot(current_state)}
                     elif payload.get("event") == "record" and isinstance(payload.get("data"), dict):
                         record = dict(payload["data"])
-                        buffered_records.append(record)
+                        persist = bool(record.pop("persist", True))
+                        if persist:
+                            buffered_records.append(dict(record))
                         yield {"event": "record", "data": record}
                     continue
 
@@ -197,20 +143,11 @@ class WorkflowService:
                     current_state = {**current_state, **result}
                 runtime_tracker.complete(step, self._detail_for_step(step, current_state))
                 self._log_route(runtime_tracker, step, current_state)
-                self._persist_draft(
-                    session_id=session_id,
-                    user_message_id=user_message_id,
-                    state=current_state,
-                    tracker=runtime_tracker,
-                    records=buffered_records,
-                )
                 yield {"event": "state", "data": runtime_tracker.snapshot(current_state)}
 
             runtime_tracker.finish()
             snapshot = runtime_tracker.snapshot(current_state)
             yield {"event": "state", "data": snapshot}
-            if session_id:
-                self.drafts.clear(session_id)
             yield {
                 "event": "done",
                 "data": {
@@ -221,35 +158,8 @@ class WorkflowService:
             }
         except Exception as exc:
             runtime_tracker.fail(str(exc), node=runtime_tracker.active_node)
-            self._persist_draft(
-                session_id=session_id,
-                user_message_id=user_message_id,
-                state=current_state,
-                tracker=runtime_tracker,
-                records=buffered_records,
-            )
             yield {"event": "state", "data": runtime_tracker.snapshot(current_state)}
             raise
-
-    def _persist_draft(
-        self,
-        *,
-        session_id: str | None,
-        user_message_id: str | None,
-        state: WorkflowState,
-        tracker: WorkflowTracker,
-        records: list[dict[str, Any]],
-    ):
-        """Persist the current live workflow draft when resumable ids are available."""
-        if not session_id or not user_message_id:
-            return
-        self.drafts.persist(
-            session_id,
-            user_message_id=user_message_id,
-            state=state,
-            snapshot=tracker.snapshot(state),
-            records=records,
-        )
 
     @staticmethod
     def _detail_for_step(step: WorkflowStep, state: WorkflowState) -> str:
@@ -280,16 +190,32 @@ class WorkflowService:
         """Mark one workflow step as running with simple UI-facing detail."""
         detail = None
         if step == WorkflowStep.PLAN:
-            detail = "Choosing the next step."
+            detail = "Planning the response."
         elif step == WorkflowStep.RETRIEVE:
             detail = "Preparing the retrieve step."
         elif step == WorkflowStep.TOOL:
             detail = "Running the tool."
         elif step == WorkflowStep.THINK:
-            detail = "Reasoning over the tool results."
+            detail = "Reviewing the tool results."
         elif step == WorkflowStep.ANSWER:
             detail = "Publishing the final answer."
         tracker.start(step, detail)
+
+    @staticmethod
+    def _apply_transition(tracker: WorkflowTracker, state: WorkflowState, payload: dict[str, Any]):
+        """Reflect one live routing hint before the current node fully completes."""
+        target = str(payload.get("to_node") or "").strip()
+        if target != WorkflowStep.ANSWER.value:
+            return
+
+        source = str(payload.get("from_node") or "").strip()
+        if source in {WorkflowStep.PLAN.value, WorkflowStep.THINK.value}:
+            tracker.complete(WorkflowStep(source), _route_detail(WorkflowStep.ANSWER.value))
+        answer = str(payload.get("answer") or "").strip()
+        if answer:
+            state["prepared_answer"] = answer
+            state["streamed_answer"] = answer
+        tracker.start(WorkflowStep.ANSWER, "Publishing the final answer.")
 
 
 def _sum_token_usage(records: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -308,4 +234,8 @@ def _sum_token_usage(records: list[dict[str, Any]]) -> dict[str, Any] | None:
 def _route_detail(next_step: Any) -> str:
     """Render a short route detail for decision nodes."""
     step = str(next_step or "").strip()
-    return f"Selected '{step}'." if step else "Selected the next step."
+    if step == WorkflowStep.RETRIEVE.value:
+        return "Will retrieve more context."
+    if step == WorkflowStep.ANSWER.value:
+        return "Answer is ready."
+    return "Decision completed."

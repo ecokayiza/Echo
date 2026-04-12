@@ -30,7 +30,7 @@ class FakeWorkflowService:
             "event": "record",
             "data": {
                 "role": "assistant",
-                "content": "[plan]\nThis can be answered directly.\n[next]\nanswer\n[answer]\nhello",
+                "content": "[plan]\nThis can be answered directly.\n[answer]\nhello",
                 "message_type": "plan",
                 "workflow_turn_id": "turn-1",
                 "token_usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
@@ -44,7 +44,7 @@ class FakeWorkflowService:
                 "records": [
                     {
                         "role": "assistant",
-                        "content": "[plan]\nThis can be answered directly.\n[next]\nanswer\n[answer]\nhello",
+                        "content": "[plan]\nThis can be answered directly.\n[answer]\nhello",
                         "message_type": "plan",
                         "workflow_turn_id": "turn-1",
                         "token_usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
@@ -65,9 +65,8 @@ class ChatServiceStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[-1]["data"]["reply"], "hello")
 
         messages = events[-1]["data"]["messages"]
-        self.assertEqual([item["role"] for item in messages], ["system", "user", "assistant", "assistant"])
+        self.assertEqual([item["role"] for item in messages], ["system", "user", "assistant"])
         self.assertEqual(messages[2]["message_type"], "plan")
-        self.assertEqual(messages[3]["message_type"], "answer")
 
 
 if __name__ == "__main__":

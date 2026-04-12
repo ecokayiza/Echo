@@ -1,4 +1,3 @@
-import { EmptyState } from "@/components/common/EmptyState";
 import { SectionCard } from "@/components/common/SectionCard";
 import type { WorkflowSnapshot } from "@/types/chat";
 import { WorkflowGraph } from "./WorkflowGraph";
@@ -8,50 +7,43 @@ interface WorkflowPanelProps {
 }
 
 export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
-  if (!workflow) {
-    return (
-      <SectionCard eyebrow="Workflow">
-        <EmptyState
-          title="No Live Workflow"
-          description="Run a message to see the current LangGraph route here while it is in flight."
-        />
-      </SectionCard>
-    );
-  }
-
-  const logEntries = buildWorkflowLogEntries(workflow);
+  const logEntries = workflow ? buildWorkflowLogEntries(workflow) : [];
 
   return (
     <SectionCard eyebrow="Workflow">
       <div aria-label="Workflow modern graph" style={{ padding: "20px 0" }}>
         <WorkflowGraph
-          nodes={workflow.node_statuses}
-          activeNode={workflow.active_node || null}
-          toolName={workflow.tool_name || null}
+          nodes={workflow?.node_statuses ?? []}
+          activeNode={workflow?.active_node || null}
+          toolName={workflow?.tool_name || null}
         />
       </div>
 
-      <div className="workflow-copy">
-        <span className="workflow-copy__label">Query</span>
-        <p>{workflow.query}</p>
-      </div>
-
-      <div className="workflow-copy">
-        <span className="workflow-copy__label">Result</span>
-        <p>{workflow.errors.length > 0 ? workflow.errors.join(" ") : workflow.answer || workflow.status}</p>
-      </div>
-
-      {logEntries.length > 0 ? (
-        <div className="workflow-copy">
-          <span className="workflow-copy__label">Logs</span>
-          <div className="workflow-log-list">
-            {logEntries.map((entry, index) => (
-              <div key={`${entry.label}-${index}`} className="workflow-log-list__item">
-                <strong>[{entry.label}]</strong> {entry.message}
-              </div>
-            ))}
+      {workflow ? (
+        <>
+          <div className="workflow-copy">
+            <span className="workflow-copy__label">Query</span>
+            <p>{workflow.query}</p>
           </div>
-        </div>
+
+          <div className="workflow-copy">
+            <span className="workflow-copy__label">Result</span>
+            <p>{workflow.errors.length > 0 ? workflow.errors.join(" ") : workflow.answer || workflow.status}</p>
+          </div>
+
+          {logEntries.length > 0 ? (
+            <div className="workflow-copy">
+              <span className="workflow-copy__label">Logs</span>
+              <div className="workflow-log-list">
+                {logEntries.map((entry, index) => (
+                  <div key={`${entry.label}-${index}`} className="workflow-log-list__item">
+                    <strong>[{entry.label}]</strong> {entry.message}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </>
       ) : null}
     </SectionCard>
   );

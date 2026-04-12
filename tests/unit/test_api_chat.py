@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -8,27 +9,39 @@ from fastapi.testclient import TestClient
 from apps.api.app.main import create_app
 from eco_rag.chat.service import SessionState
 from eco_rag.config import Config
+from eco_rag.indexing.vector_database import VectorDatabase
 
 READ_ONLY_TYPES = {"plan", "think", "tool"}
 
 
-def workflow_payload(query: str, *, status: str, active_node: str | None, answer: str = "", workflow_turn_id: str = "wf-1"):
-    return {
+def workflow_payload(
+    query: str,
+    *,
+    status: str,
+    active_node: str | None,
+    answer: str = "",
+    workflow_turn_id: str = "wf-1",
+    token_usage: dict | None = None,
+):
+    payload = {
         "workflow_turn_id": workflow_turn_id,
         "query": query,
         "answer": answer,
         "status": status,
         "active_node": active_node,
         "node_statuses": [
-            {"node": "plan", "status": "completed", "detail": "Selected 'retrieve'." if status == "completed" else "Choosing the next step."},
+            {"node": "plan", "status": "completed", "detail": "Will retrieve more context." if status == "completed" else "Planning the response."},
             {"node": "retrieve", "status": "completed" if status == "completed" else "queued", "detail": "Accepted 'legacy_search'." if status == "completed" else None},
             {"node": "tool", "status": "completed" if status == "completed" else "queued", "detail": "Completed round 1." if status == "completed" else None},
-            {"node": "think", "status": "running" if active_node == "think" else ("completed" if status == "completed" else "queued"), "detail": "Reasoning over the tool results." if active_node == "think" else ("Selected 'answer'." if status == "completed" else None)},
+            {"node": "think", "status": "running" if active_node == "think" else ("completed" if status == "completed" else "queued"), "detail": "Reviewing the tool results." if active_node == "think" else ("Answer is ready." if status == "completed" else None)},
             {"node": "answer", "status": "completed" if status == "completed" else "queued", "detail": "Final answer emitted." if status == "completed" else None},
         ],
         "logs": [],
         "errors": [],
     }
+    if token_usage is not None:
+        payload["token_usage"] = token_usage
+    return payload
 
 
 class FakeChatService:
@@ -118,7 +131,7 @@ class FakeChatService:
                 {
                     "id": "plan-1",
                     "role": "assistant",
-                    "content": "[plan]\nNeed retrieval.\n[next]\nretrieve\n[retrieve]\nlegacy_search(\"hello\")",
+                    "content": "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
                     "message_type": "plan",
                     "workflow_turn_id": workflow_turn_id,
                     "token_usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
@@ -134,7 +147,7 @@ class FakeChatService:
                 {
                     "id": "think-1",
                     "role": "assistant",
-                    "content": "[think]\nThe evidence is enough.\n[next]\nanswer\n[answer]\nreply:hello",
+                    "content": "[think]\nThe evidence is enough.\n[answer]\nreply:hello",
                     "message_type": "think",
                     "workflow_turn_id": workflow_turn_id,
                     "token_usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
@@ -148,16 +161,7 @@ class FakeChatService:
             active_node=None,
             answer=f"reply:{message}",
             workflow_turn_id=workflow_turn_id,
-        )
-        session["messages"].append(
-            {
-                "id": "assistant-1",
-                "role": "assistant",
-                "content": f"reply:{message}",
-                "message_type": "answer",
-                "workflow_turn_id": workflow_turn_id,
-                "token_usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
-            }
+            token_usage={"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
         )
         session["title"] = message
         yield {
@@ -213,7 +217,7 @@ class FakeChatService:
                 {
                     "id": "plan-2",
                     "role": "assistant",
-                    "content": "[plan]\nNeed retrieval.\n[next]\nretrieve\n[retrieve]\nlegacy_search(\"hello\")",
+                    "content": "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
                     "message_type": "plan",
                     "workflow_turn_id": workflow_turn_id,
                 },
@@ -228,15 +232,8 @@ class FakeChatService:
                 {
                     "id": "think-2",
                     "role": "assistant",
-                    "content": "[think]\nThe evidence is enough.\n[next]\nanswer\n[answer]\nreply:regenerated",
+                    "content": "[think]\nThe evidence is enough.\n[answer]\nreply:regenerated",
                     "message_type": "think",
-                    "workflow_turn_id": workflow_turn_id,
-                },
-                {
-                    "id": "assistant-2",
-                    "role": "assistant",
-                    "content": "reply:regenerated",
-                    "message_type": "answer",
                     "workflow_turn_id": workflow_turn_id,
                     "token_usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
                 },
@@ -287,9 +284,12 @@ class ApiChatTests(unittest.TestCase):
         self._previous_models_path = Config.MODELS_PATH
         self._previous_databases_path = Config.DATABASES_PATH
         self._previous_db_path = Config.DB_PATH
+        self._previous_data_dir = Config.DATA_DIR
         Config.MODELS_PATH = type(Config.MODELS_PATH)(self._temp_dir.name) / "models.json"
         Config.DATABASES_PATH = type(Config.DATABASES_PATH)(self._temp_dir.name) / "databases.json"
         Config.DB_PATH = type(Config.DB_PATH)(self._temp_dir.name) / "db"
+        Config.DATA_DIR = type(Config.DATA_DIR)(self._temp_dir.name) / "data"
+        Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
         Config.MODELS_PATH.write_text(
             json.dumps(
                 {
@@ -326,6 +326,7 @@ class ApiChatTests(unittest.TestCase):
         Config.MODELS_PATH = self._previous_models_path
         Config.DATABASES_PATH = self._previous_databases_path
         Config.DB_PATH = self._previous_db_path
+        Config.DATA_DIR = self._previous_data_dir
         try:
             self._temp_dir.cleanup()
         except PermissionError:
@@ -363,11 +364,11 @@ class ApiChatTests(unittest.TestCase):
 
         state = self.client.get("/api/sessions/s2").json()
         self.assertEqual(state["messages"][0]["role"], "system")
-        self.assertNotIn("workflow", next(item for item in state["messages"] if item.get("message_type") == "answer"))
+        self.assertNotIn("workflow", next(item for item in state["messages"] if item.get("message_type") == "think"))
         user_message_id = next(item["id"] for item in state["messages"] if item["role"] == "user")
         plan_message_id = next(item["id"] for item in state["messages"] if item.get("message_type") == "plan")
         tool_message_id = next(item["id"] for item in state["messages"] if item.get("message_type") == "tool")
-        assistant_message_id = next(item["id"] for item in state["messages"] if item.get("message_type") == "answer")
+        assistant_message_id = next(item["id"] for item in state["messages"] if item.get("message_type") == "think")
 
         updated = self.client.patch(f"/api/sessions/s2/messages/{user_message_id}", json={"content": "edited"})
         self.assertEqual(updated.status_code, 200)
@@ -383,13 +384,13 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(system_prompt.status_code, 200)
         self.assertEqual(system_prompt.json()["messages"][0]["content"], "Stay practical.")
 
-        rolled_back = self.client.post(f"/api/sessions/s2/messages/{assistant_message_id}/rollback")
+        rolled_back = self.client.post(f"/api/sessions/s2/messages/{user_message_id}/rollback")
         self.assertEqual(rolled_back.status_code, 200)
 
-        deleted = self.client.delete(f"/api/sessions/s2/messages/{assistant_message_id}")
+        deleted = self.client.delete(f"/api/sessions/s2/messages/{user_message_id}")
         self.assertEqual(deleted.status_code, 200)
-        remaining_types = [item.get("message_type") for item in deleted.json()["messages"]]
-        self.assertNotIn("answer", remaining_types)
+        remaining_ids = [item["id"] for item in deleted.json()["messages"]]
+        self.assertNotIn(user_message_id, remaining_ids)
 
     def test_database_routes(self):
         listed = self.client.get("/api/databases")
@@ -420,6 +421,45 @@ class ApiChatTests(unittest.TestCase):
         deleted = self.client.delete(f"/api/databases/{created_database['id']}")
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual(len(deleted.json()["databases"]), 1)
+
+    def test_database_document_upload_route(self):
+        database = self.client.get("/api/databases").json()["databases"][0]
+        with patch("apps.api.app.main.Assembler.delete_file") as delete_file:
+            with patch("apps.api.app.main.Assembler.store_file") as store_file:
+                uploaded = self.client.post(
+                    f"/api/databases/{database['id']}/documents",
+                    files=[("files", ("notes.md", b"# Notes\nHello world", "text/markdown"))],
+                )
+
+        self.assertEqual(uploaded.status_code, 200)
+        saved_path = str(store_file.call_args.args[0])
+        self.assertTrue(saved_path.endswith("notes.md"))
+        self.assertTrue((Config.DATA_DIR / "uploads" / database["collection_name"] / "notes.md").exists())
+        delete_file.assert_called_once_with(saved_path)
+
+    def test_database_document_preview_route(self):
+        database = self.client.get("/api/databases").json()["databases"][0]
+        vector_db = VectorDatabase(collection_name=database["collection_name"])
+        vector_db.add_documents(
+            texts=["first chunk", "second chunk", "guide chunk"],
+            embeddings=[[0.1, 0.2], [0.2, 0.3], [0.3, 0.4]],
+            metadatas=[
+                {"source_name": "notes.md", "source_type": "md", "file_path": "uploads/test/notes.md", "chunk_index": 0},
+                {"source_name": "notes.md", "source_type": "md", "file_path": "uploads/test/notes.md", "chunk_index": 1},
+                {"source_name": "guide.pdf", "source_type": "pdf", "file_path": "uploads/test/guide.pdf", "chunk_index": 0},
+            ],
+            ids=["chunk-1", "chunk-2", "chunk-3"],
+        )
+
+        response = self.client.get(f"/api/databases/{database['id']}/documents")
+        self.assertEqual(response.status_code, 200)
+        documents = response.json()
+        self.assertEqual(len(documents), 2)
+
+        guide = next(item for item in documents if item["source_name"] == "guide.pdf")
+        notes = next(item for item in documents if item["source_name"] == "notes.md")
+        self.assertEqual(guide["chunk_count"], 1)
+        self.assertEqual(notes["chunk_count"], 2)
 
     def test_stream_regenerate_endpoint(self):
         self.client.post("/api/sessions", json={"session_id": "stream"})

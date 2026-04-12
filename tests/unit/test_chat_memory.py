@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from eco_rag.chat import Messages, Sessions
+from eco_rag.workflow.prompts import default_system_prompt
 
 
 class ChatMemoryTests(unittest.TestCase):
@@ -109,7 +110,7 @@ class ChatMemoryTests(unittest.TestCase):
         messages.append("user", "hello", message_type="user")
         messages.append(
             "assistant",
-            "[plan]\nNeed retrieval.\n[next]\nretrieve\n[retrieve]\nlegacy_search(\"hello\")",
+            "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
             message_type="plan",
             workflow_turn_id="turn-1",
         )
@@ -122,7 +123,7 @@ class ChatMemoryTests(unittest.TestCase):
         )
         messages.append(
             "assistant",
-            "[think]\nThe evidence is enough.\n[next]\nanswer\n[answer]\nworld",
+            "[think]\nThe evidence is enough.\n[answer]\nworld",
             message_type="think",
             workflow_turn_id="turn-1",
         )
@@ -154,7 +155,7 @@ class ChatMemoryTests(unittest.TestCase):
         messages.append("user", "hi", message_type="user")
         messages.append(
             "assistant",
-            "[plan]\nThis is a greeting.\n[next]\nanswer\n[answer]\nHello!",
+            "[plan]\nThis is a greeting.\n[answer]\nHello!",
             message_type="plan",
             workflow_turn_id="turn-1",
         )
@@ -196,6 +197,53 @@ class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, "read-only"):
             await messages.apply("regenerate", message_id=plan_message.id, response_factory=lambda _context: ("x", None))
 
+    async def test_workflow_answer_proxy_edit_updates_only_answer_block(self):
+        sessions = Sessions(session_id="answer-proxy-edit", storage={})
+        messages = Messages(sessions=sessions)
+        reply = messages.append(
+            "assistant",
+            "[plan]\nThis is a greeting.\n\n[answer]\nHello!",
+            message_type="plan",
+            workflow_turn_id="turn-1",
+        )
+
+        await messages.apply("edit", message_id=reply.id, content="Hello again!")
+
+        updated = messages.get()[-1]
+        self.assertEqual(updated.message_type, "plan")
+        self.assertIn("[plan]\nThis is a greeting.", updated.content)
+        self.assertIn("[answer]\nHello again!", updated.content)
+
+    async def test_workflow_answer_proxy_delete_removes_entire_turn(self):
+        sessions = Sessions(session_id="answer-proxy-delete", storage={})
+        messages = Messages(sessions=sessions)
+        messages.append("user", "hello", message_type="user")
+        messages.append(
+            "assistant",
+            "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
+            message_type="plan",
+            workflow_turn_id="turn-1",
+        )
+        messages.append(
+            "tool",
+            "[tool]\nlegacy_search(query='hello')",
+            message_type="tool",
+            workflow_turn_id="turn-1",
+            tool_name="legacy_search",
+        )
+        reply = messages.append(
+            "assistant",
+            "[think]\nThe evidence is enough.\n\n[answer]\nworld",
+            message_type="think",
+            workflow_turn_id="turn-1",
+        )
+
+        await messages.apply("delete", message_id=reply.id)
+
+        history = messages.history()
+        self.assertEqual([item["role"] for item in history], ["user"])
+        self.assertEqual([item["content"] for item in history], ["hello"])
+
     async def test_system_prompt_reset_keeps_one_top_level_system_message(self):
         sessions = Sessions(session_id="system", storage={})
         messages = Messages(sessions=sessions, default_system_prompt="default system")
@@ -210,6 +258,15 @@ class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
         state = sessions.get()
         self.assertEqual([item.role for item in state["messages"]], ["system"])
         self.assertEqual(state["messages"][0].content, "default system")
+
+
+class WorkflowPromptTests(unittest.TestCase):
+    def test_default_system_prompt_embeds_skill_documents(self):
+        prompt = default_system_prompt()
+
+        self.assertIn("# database_search", prompt)
+        self.assertIn("# web_search", prompt)
+        self.assertIn("# Available Skills", prompt)
 
 
 if __name__ == "__main__":

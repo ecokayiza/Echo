@@ -19,3 +19,6 @@ memory/artifacts/*
 apps/web/node_modules/
 apps/web/dist/
 models.json
+databases.json
+eco_rag.egg-info/
+uv.lock
