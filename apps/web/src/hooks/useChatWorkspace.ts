@@ -34,6 +34,7 @@ import type {
   ModelSettingsDocument,
   SessionState,
   SessionSummary,
+  UploadJobRecord,
   WorkflowSnapshot,
 } from "@/types/chat";
 
@@ -51,6 +52,7 @@ interface WorkspaceState {
   sessionId: string | null;
   messages: MessageRecord[];
   workflow: WorkflowSnapshot | null;
+  uploadJob: UploadJobRecord | null;
   statusText: string;
   statusTone: StatusTone;
   liveLabel: string;
@@ -69,7 +71,8 @@ type Action =
   | { type: "session:apply"; payload: SessionState; workflow?: WorkflowSnapshot | null }
   | { type: "session:remove"; sessionId: string }
   | { type: "messages:set"; messages: MessageRecord[] }
-  | { type: "workflow:set"; workflow: WorkflowSnapshot | null };
+  | { type: "workflow:set"; workflow: WorkflowSnapshot | null }
+  | { type: "upload-job:set"; uploadJob: UploadJobRecord | null };
 
 const initialState: WorkspaceState = {
   ready: false,
@@ -83,6 +86,7 @@ const initialState: WorkspaceState = {
   sessionId: null,
   messages: [],
   workflow: null,
+  uploadJob: null,
   statusText: "Connecting...",
   statusTone: "neutral",
   liveLabel: "Booting",
@@ -125,6 +129,8 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         ...state,
         databases: action.payload.databases,
         activeDatabaseId: action.payload.active_database_id,
+        uploadJob:
+          state.uploadJob && state.uploadJob.database_id !== action.payload.active_database_id ? null : state.uploadJob,
       };
     case "database-documents:set":
       return {
@@ -167,6 +173,11 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         ...state,
         workflow: action.workflow,
       };
+    case "upload-job:set":
+      return {
+        ...state,
+        uploadJob: action.uploadJob,
+      };
     default:
       return state;
   }
@@ -178,6 +189,12 @@ function getErrorMessage(error: unknown) {
 
 function replaceAtIndex<T>(items: T[], index: number, nextItem: T) {
   return items.map((item, itemIndex) => (itemIndex === index ? nextItem : item));
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function normalizeLiveWorkflowRecord(
@@ -347,23 +364,10 @@ export function useChatWorkspace() {
         });
 
         if (sessions.length === 0) {
-          const session = await api.createSession();
+          await createSession();
           if (cancelled) {
             return;
           }
-          storage.setSessionId(session.session_id);
-          setSessionIdInUrl(session.session_id);
-
-          const payload = await api.getSession(session.session_id);
-          if (cancelled) {
-            return;
-          }
-
-          startTransition(() => {
-            dispatch({ type: "session:apply", payload });
-            dispatch({ type: "status", text: "Created a fresh session.", tone: "success", liveLabel: "Ready" });
-          });
-          setSystemPromptDraft(getPromptFromMessages(payload.messages, meta.default_system_prompt));
           dispatch({ type: "ready" });
           return;
         }
@@ -493,6 +497,25 @@ export function useChatWorkspace() {
     return syncDatabaseState(payload);
   }
 
+  async function pollDatabaseUploadJob(databaseId: string, jobId: string) {
+    for (;;) {
+      const uploadJob = await api.getDatabaseUploadJob(databaseId, jobId);
+      startTransition(() => {
+        dispatch({ type: "upload-job:set", uploadJob });
+      });
+      dispatch({
+        type: "status",
+        text: uploadJob.message || "Embedding ...",
+        tone: uploadJob.status === "failed" ? "error" : "neutral",
+        liveLabel: uploadJob.status === "failed" ? "Error" : "Working",
+      });
+      if (uploadJob.status === "completed" || uploadJob.status === "failed") {
+        return uploadJob;
+      }
+      await delay(500);
+    }
+  }
+
   async function selectSession(sessionId: string) {
     syncSelectedSession(sessionId);
 
@@ -508,11 +531,46 @@ export function useChatWorkspace() {
   }
 
   async function createSession(title?: string | null) {
+    if ((state.messages.length === 0 || (state.messages.length === 1 && state.messages[0].role === "system")) && !state.busy) {
+      // 没有任何实质内容时反复点击New Session，不真正发请求，仅仅让界面Focus或者反馈
+      dispatch({ type: "status", text: "Already in a blank session.", tone: "neutral", liveLabel: "Ready" });
+      return;
+    }
+
     await withBusy("Creating session...", async () => {
-      const session = await api.createSession({ title: title ?? null });
-      syncSelectedSession(session.session_id);
-      await loadSessionSnapshot(session.session_id);
-      dispatch({ type: "status", text: "Created a fresh session.", tone: "success", liveLabel: "Ready" });
+      const sessionId = crypto.randomUUID(); // 在前端生成一个假的/临时的ID
+      const currentPrompt = systemPromptDraft || state.meta?.default_system_prompt || "";
+
+      // 不真正向后端发请求建立session，而是直接进入空状态
+      storage.setSessionId(sessionId);
+      setSessionIdInUrl(sessionId);
+
+      startTransition(() => {
+        dispatch({ type: "session:select", sessionId });
+        dispatch({
+          type: "session:apply",
+          payload: {
+            session: {
+              session_id: sessionId,
+              title: title ?? "New Session",
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              message_count: 0,
+              preview: "",
+              token_usage: {},
+              total_tokens: 0,
+            },
+            messages: currentPrompt ? [{
+              id: crypto.randomUUID(),
+              role: "system",
+              content: currentPrompt,
+              created_at: new Date().toISOString(),
+            } as any] : [],
+          },
+        });
+      });
+
+      dispatch({ type: "status", text: "Ready for your first message.", tone: "success", liveLabel: "Ready" });
     });
   }
 
@@ -801,22 +859,93 @@ export function useChatWorkspace() {
       return;
     }
 
-    await withBusy(
-      files.length === 1 ? `Uploading "${files[0].name}"...` : `Uploading ${files.length} files...`,
-      async () => {
-        const payload = await api.uploadDatabaseDocuments(targetDatabaseId, files);
-        await syncDatabaseState(payload);
-        dispatch({
-          type: "status",
-          text: files.length === 1 ? `Uploaded "${files[0].name}".` : `Uploaded ${files.length} documents.`,
-          tone: "success",
-          liveLabel: "Ready",
+    dispatch({
+      type: "busy",
+      busy: true,
+      label: files.length === 1 ? `Uploading "${files[0].name}"...` : `Uploading ${files.length} files...`,
+    });
+    startTransition(() => {
+      dispatch({ type: "upload-job:set", uploadJob: null });
+    });
+
+    try {
+      const createdJob = await api.createDatabaseUploadJob(targetDatabaseId, files, { skipExisting: true });
+      startTransition(() => {
+        dispatch({ type: "upload-job:set", uploadJob: createdJob });
+      });
+      const finishedJob = await pollDatabaseUploadJob(targetDatabaseId, createdJob.job_id);
+      if (finishedJob.status === "failed") {
+        throw new Error(finishedJob.error || finishedJob.message || "Embedding upload failed.");
+      }
+      await refreshDatabaseState();
+      startTransition(() => {
+        dispatch({ type: "upload-job:set", uploadJob: null });
+      });
+      dispatch({
+        type: "status",
+        text:
+          files.length === 1
+            ? `Finished "${files[0].name}". Existing files were skipped automatically.`
+            : `Finished ${files.length} documents. Existing files were skipped automatically.`,
+        tone: "success",
+        liveLabel: "Ready",
+      });
+    } catch (error) {
+      dispatch({ type: "status", text: getErrorMessage(error), tone: "error", liveLabel: "Error" });
+    } finally {
+      dispatch({ type: "busy", busy: false });
+      window.requestAnimationFrame(() => {
+        messageInputRef.current?.focus();
+      });
+    }
+  }
+
+  async function renameDatabaseDocument(document: DatabaseDocumentRecord, nextName: string) {
+    if (!state.activeDatabaseId || state.busy) {
+      return;
+    }
+
+    const cleanedName = nextName.trim();
+    if (!cleanedName) {
+      dispatch({ type: "status", text: "Document name cannot be empty.", tone: "error", liveLabel: "Error" });
+      return;
+    }
+
+    if (cleanedName === document.source_name.trim()) {
+      return;
+    }
+
+    await withBusy("Renaming document...", async () => {
+      const documents = await api.renameDatabaseDocument(state.activeDatabaseId!, document.id, cleanedName);
+      startTransition(() => {
+        dispatch({ type: "database-documents:set", documents });
+      });
+      dispatch({ type: "status", text: `Renamed to "${cleanedName}".`, tone: "success", liveLabel: "Ready" });
+    });
+  }
+
+  function openDeleteDatabaseDocumentDialog(document: DatabaseDocumentRecord) {
+    if (!state.activeDatabaseId || state.busy) {
+      return;
+    }
+
+    setConfirmDialog({
+      title: "Delete Document",
+      description: `Remove "${document.source_name}" from the active database?`,
+      confirmLabel: "Delete Document",
+      tone: "danger",
+      onConfirm: async () => {
+        await withBusy("Deleting document...", async () => {
+          const documents = await api.deleteDatabaseDocument(state.activeDatabaseId!, document.id);
+          startTransition(() => {
+            dispatch({ type: "database-documents:set", documents });
+          });
+          await refreshDatabaseState();
+          setConfirmDialog(null);
+          dispatch({ type: "status", text: `Deleted "${document.source_name}".`, tone: "success", liveLabel: "Ready" });
         });
       },
-      async (detail) => {
-        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
-      }
-    );
+    });
   }
 
   function openDeleteDatabaseDialog(database: DatabaseRecord) {
@@ -888,9 +1017,7 @@ export function useChatWorkspace() {
             syncSelectedSession(nextSessionId);
             await loadSessionSnapshot(nextSessionId);
           } else if (deletedId === state.sessionId) {
-            const session = await api.createSession();
-            syncSelectedSession(session.session_id);
-            await loadSessionSnapshot(session.session_id);
+            await createSession();
           }
 
           dispatch({ type: "status", text: "Session deleted.", tone: "success", liveLabel: "Ready" });
@@ -978,6 +1105,14 @@ export function useChatWorkspace() {
     let currentContent = "Thinking...";
     let liveRecords: MessageRecord[] = [];
 
+    // Ensure session exists on the backend before sending the first user message
+    let activeSessionId = state.sessionId;
+    if (stableMessages.length === 0 || (stableMessages.length === 1 && stableMessages[0].role === "system")) {
+       const session = await api.createSession({ session_id: activeSessionId });
+       activeSessionId = session.session_id;
+       syncSelectedSession(activeSessionId);
+    }
+
     setMessageDraft("");
     startTransition(() => {
       dispatch({ type: "workflow:set", workflow: pendingWorkflow });
@@ -991,7 +1126,7 @@ export function useChatWorkspace() {
       "Thinking...",
       async () => {
         await readEventStream(
-          `/api/sessions/${encodeURIComponent(state.sessionId!)}/messages/stream`,
+          `/api/sessions/${encodeURIComponent(activeSessionId)}/messages/stream`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1223,6 +1358,7 @@ export function useChatWorkspace() {
       modelNames: modelSettings.chat_models.map((item) => item.name),
       embeddingModelNames: modelSettings.embedding_models.map((item) => item.name),
       databaseDocuments: state.databaseDocuments,
+      uploadJob: state.uploadJob,
       totalStoredTokens,
       formatNumber,
     },
@@ -1270,6 +1406,8 @@ export function useChatWorkspace() {
       createDatabase,
       renameDatabase,
       uploadDatabaseDocuments,
+      renameDatabaseDocument,
+      openDeleteDatabaseDocumentDialog,
       openDeleteDatabaseDialog,
       renameSession,
       openDeleteSessionDialog,

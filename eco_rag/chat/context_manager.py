@@ -152,14 +152,25 @@ class Sessions:
 
     def _summary(self, payload: dict[str, Any]) -> dict[str, Any]:
         session = self._session(payload)
-        preview = next(
-            (
-                message.content.strip()[:80]
-                for message in reversed(session["messages"])
-                if message.role != "system" and message.content.strip()
-            ),
-            "",
-        )
+        
+        # Prefer showing the latest assistant's answer for the preview
+        preview = ""
+        for message in reversed(session["messages"]):
+            if message.role == "assistant" and message.content.strip():
+                content = message.content.strip()
+                if "[answer]" in content:
+                    preview = content.split("[answer]")[-1].strip()[:80]
+                else:
+                    preview = content[:80]
+                break
+        
+        # Fallback to the latest non-system message if no assistant answer is found
+        if not preview:
+             for message in reversed(session["messages"]):
+                 if message.role != "system" and message.content.strip():
+                     preview = message.content.strip()[:80]
+                     break
+                     
         usage = dict(session["usage"])
         total = usage.get("total_tokens", (usage.get("prompt_tokens") or 0) + (usage.get("completion_tokens") or 0))
         return {

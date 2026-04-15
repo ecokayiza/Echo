@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from openai import OpenAI
+import re
+from collections.abc import Callable
+
+from openai import BadRequestError, OpenAI
 
 from ..chat.registry import EmbeddingModelSettings, get_active_embedding_model_settings, normalize_embedding_model_settings
 from ..config import Config
 
 DEFAULT_QUERY_INSTRUCTION = "Given a user query, retrieve relevant passages that answer the query."
+MAX_BATCH_SIZE_PATTERN = re.compile(r"batch size is invalid, it should not be larger than (\d+)", re.IGNORECASE)
 
 
 class OpenAICompatibleEmbedder:
@@ -19,6 +23,7 @@ class OpenAICompatibleEmbedder:
         input_type: str = "document",
         instruction: str | None = None,
         dimensions: int | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> list[list[float]]:
         texts = [data] if isinstance(data, str) else [str(item) for item in data]
         if not texts:
@@ -42,13 +47,34 @@ class OpenAICompatibleEmbedder:
             )
 
         client = OpenAI(api_key=resolved.api_key, base_url=resolved.base_url)
-        response = client.embeddings.create(model=resolved.model, input=prepared, dimensions=dimensions)
-        return [item.embedding for item in response.data]
+        request_kwargs = {"model": resolved.model, "input": prepared}
+        if dimensions is not None:
+            request_kwargs["dimensions"] = dimensions
+        configured_batch_size = _configured_batch_size(resolved)
+        if configured_batch_size is not None and len(prepared) > configured_batch_size:
+            return _embed_in_batches(client, request_kwargs, configured_batch_size, progress_callback=progress_callback)
+
+        try:
+            embeddings = _extract_embeddings(client.embeddings.create(**request_kwargs))
+            if progress_callback is not None:
+                progress_callback(len(prepared), len(prepared))
+            return embeddings
+        except BadRequestError as exc:
+            max_batch_size = _extract_max_batch_size(exc)
+            if max_batch_size is None or len(prepared) <= 1:
+                raise
+
+        return _embed_in_batches(client, request_kwargs, max_batch_size, progress_callback=progress_callback)
 
     @staticmethod
-    def embed_documents(data: str | list[str], settings: EmbeddingModelSettings | dict | None = None) -> list[list[float]]:
+    def embed_documents(
+        data: str | list[str],
+        settings: EmbeddingModelSettings | dict | None = None,
+        *,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> list[list[float]]:
         """Embed one or more documents without query instruction prefixes."""
-        return OpenAICompatibleEmbedder.embed(data, settings, input_type="document")
+        return OpenAICompatibleEmbedder.embed(data, settings, input_type="document", progress_callback=progress_callback)
 
     @staticmethod
     def embed_query(
@@ -78,5 +104,46 @@ def _prepare_input_text(text: str, *, input_type: str, instruction: str | None) 
         task = (instruction or DEFAULT_QUERY_INSTRUCTION).strip()
         return f"Instruct: {task}\nQuery: {cleaned}"
     return cleaned
+
+
+def _extract_embeddings(response) -> list[list[float]]:
+    return [item.embedding for item in response.data]
+
+
+def _embed_in_batches(
+    client: OpenAI,
+    request_kwargs: dict,
+    max_batch_size: int,
+    *,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[list[float]]:
+    embeddings: list[list[float]] = []
+    total = len(request_kwargs["input"])
+    completed = 0
+    for batch in _batched(request_kwargs["input"], max_batch_size):
+        batch_kwargs = {**request_kwargs, "input": batch}
+        embeddings.extend(_extract_embeddings(client.embeddings.create(**batch_kwargs)))
+        completed += len(batch)
+        if progress_callback is not None:
+            progress_callback(completed, total)
+    return embeddings
+
+
+def _configured_batch_size(settings: EmbeddingModelSettings) -> int | None:
+    return settings.batch_size if settings.batch_size and settings.batch_size > 0 else None
+
+
+def _extract_max_batch_size(exc: BadRequestError) -> int | None:
+    message = str(exc)
+    match = MAX_BATCH_SIZE_PATTERN.search(message)
+    if match is None:
+        return None
+    size = int(match.group(1))
+    return size if size > 0 else None
+
+
+def _batched(items: list[str], size: int):
+    for index in range(0, len(items), size):
+        yield items[index : index + size]
 
 HuggingFaceEmbedder = OpenAICompatibleEmbedder

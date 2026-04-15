@@ -197,7 +197,7 @@ export function DatabaseSettingsModal({
 
                 <p className="database-card__meta">{database.embedding_model_name}</p>
                 <div className="database-card__row">
-                  <span className="database-card__count">{formatNumber(database.document_count)} docs</span>
+                  <span className="database-card__count">{formatNumber(database.document_count)} files</span>
                   <Button
                     disabled={busy || isActive}
                     onClick={() => {

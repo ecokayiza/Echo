@@ -250,6 +250,31 @@ export function EmbeddingModelSettingsModal({
                   value={isAddingNew ? (newModel.api_key ?? "") : (activeModel?.api_key ?? "")}
                 />
               </Field>
+
+              <Field
+                htmlFor={isAddingNew ? "new-embedding-batch-size" : `embedding-batch-size-${activeIndex}`}
+                label="Batch Size"
+              >
+                <input
+                  disabled={busy}
+                  id={isAddingNew ? "new-embedding-batch-size" : `embedding-batch-size-${activeIndex}`}
+                  min={1}
+                  onChange={(event) => {
+                    const rawValue = event.target.value.trim();
+                    const value = rawValue ? Number.parseInt(rawValue, 10) : null;
+                    const nextValue = Number.isInteger(value) && value && value > 0 ? value : null;
+                    if (isAddingNew) {
+                      setNewModel((current) => ({ ...current, batch_size: nextValue }));
+                      return;
+                    }
+                    onUpdateEmbeddingModel(activeIndex, "batch_size", nextValue);
+                  }}
+                  placeholder="Optional"
+                  step={1}
+                  type="number"
+                  value={isAddingNew ? (newModel.batch_size ?? "") : (activeModel?.batch_size ?? "")}
+                />
+              </Field>
             </div>
           )}
         </SectionCard>

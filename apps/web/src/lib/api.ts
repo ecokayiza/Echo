@@ -6,6 +6,7 @@ import type {
   ModelSettingsDocument,
   SessionState,
   SessionSummary,
+  UploadJobRecord,
 } from "@/types/chat";
 
 async function requestJson<T>(url: string, init?: RequestInit) {
@@ -63,18 +64,53 @@ export const api = {
       method: "DELETE",
     });
   },
-  uploadDatabaseDocuments(databaseId: string, files: File[]) {
+  uploadDatabaseDocuments(databaseId: string, files: File[], options?: { skipExisting?: boolean }) {
     const formData = new FormData();
     files.forEach((file) => {
       formData.append("files", file);
     });
+    formData.append("skip_existing", String(options?.skipExisting ?? true));
     return requestJson<DatabaseState>(`/api/databases/${encodeURIComponent(databaseId)}/documents`, {
       method: "POST",
       body: formData,
     });
   },
+  createDatabaseUploadJob(databaseId: string, files: File[], options?: { skipExisting?: boolean }) {
+    const formData = new FormData();
+    files.forEach((file) => {
+      formData.append("files", file);
+    });
+    formData.append("skip_existing", String(options?.skipExisting ?? true));
+    return requestJson<UploadJobRecord>(`/api/databases/${encodeURIComponent(databaseId)}/documents/jobs`, {
+      method: "POST",
+      body: formData,
+    });
+  },
+  getDatabaseUploadJob(databaseId: string, jobId: string) {
+    return requestJson<UploadJobRecord>(
+      `/api/databases/${encodeURIComponent(databaseId)}/documents/jobs/${encodeURIComponent(jobId)}`
+    );
+  },
   listDatabaseDocuments(databaseId: string) {
     return requestJson<DatabaseDocumentRecord[]>(`/api/databases/${encodeURIComponent(databaseId)}/documents`);
+  },
+  renameDatabaseDocument(databaseId: string, documentId: string, sourceName: string) {
+    return requestJson<DatabaseDocumentRecord[]>(
+      `/api/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(documentId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source_name: sourceName }),
+      }
+    );
+  },
+  deleteDatabaseDocument(databaseId: string, documentId: string) {
+    return requestJson<DatabaseDocumentRecord[]>(
+      `/api/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(documentId)}`,
+      {
+        method: "DELETE",
+      }
+    );
   },
   listSessions() {
     return requestJson<SessionSummary[]>("/api/sessions");

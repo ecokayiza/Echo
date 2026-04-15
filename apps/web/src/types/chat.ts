@@ -59,6 +59,30 @@ export interface DatabaseDocumentRecord {
   chunk_count: number;
 }
 
+export interface UploadJobFileRecord {
+  id: string;
+  source_name: string;
+  status: string;
+  chunk_count: number;
+  embedded_chunks: number;
+  progress: number;
+}
+
+export interface UploadJobRecord {
+  job_id: string;
+  database_id: string;
+  status: string;
+  message: string;
+  progress: number;
+  total_files: number;
+  completed_files: number;
+  total_chunks: number;
+  embedded_chunks: number;
+  current_file_name: string | null;
+  files: UploadJobFileRecord[];
+  error: string | null;
+}
+
 export interface WorkflowNodeStatus {
   node: string;
   status: string;
@@ -109,6 +133,7 @@ export interface EmbeddingModelConfig {
   model: string | null;
   api_key: string | null;
   base_url: string | null;
+  batch_size: number | null;
 }
 
 export interface ModelSettingsDocument {

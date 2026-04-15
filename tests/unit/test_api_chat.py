@@ -264,7 +264,23 @@ class FakeChatService:
             for key, value in (message.get("token_usage") or {}).items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     token_usage[key] = token_usage.get(key, 0) + value
-        preview = next((item["content"][:80] for item in reversed(session["messages"]) if item["role"] != "system"), "")
+                    
+        preview = ""
+        for message in reversed(session["messages"]):
+            if message["role"] == "assistant" and message["content"].strip():
+                content = message["content"].strip()
+                if "[answer]" in content:
+                    preview = content.split("[answer]")[-1].strip()[:80]
+                else:
+                    preview = content[:80]
+                break
+                
+        if not preview:
+            for message in reversed(session["messages"]):
+                if message["role"] != "system" and message["content"].strip():
+                    preview = message["content"].strip()[:80]
+                    break
+        
         message_count = len([item for item in session["messages"] if item["role"] != "system"])
         return {
             "session_id": session["session_id"],
@@ -396,15 +412,15 @@ class ApiChatTests(unittest.TestCase):
         listed = self.client.get("/api/databases")
         self.assertEqual(listed.status_code, 200)
         payload = listed.json()
-        self.assertEqual(len(payload["databases"]), 1)
-        self.assertEqual(payload["active_database_id"], payload["databases"][0]["id"])
+        self.assertEqual(len(payload["databases"]), 0)
+        self.assertIsNone(payload["active_database_id"])
 
         created = self.client.post(
             "/api/databases",
             json={"name": "Research Notes", "embedding_model_name": "Test Embedding"},
         )
         self.assertEqual(created.status_code, 200)
-        self.assertEqual(len(created.json()["databases"]), 2)
+        self.assertEqual(len(created.json()["databases"]), 1)
         created_database = next(item for item in created.json()["databases"] if item["name"] == "Research Notes")
 
         renamed = self.client.patch(f"/api/databases/{created_database['id']}", json={"name": "Renamed Notes"})
@@ -420,10 +436,12 @@ class ApiChatTests(unittest.TestCase):
 
         deleted = self.client.delete(f"/api/databases/{created_database['id']}")
         self.assertEqual(deleted.status_code, 200)
-        self.assertEqual(len(deleted.json()["databases"]), 1)
+        self.assertEqual(len(deleted.json()["databases"]), 0)
 
     def test_database_document_upload_route(self):
-        database = self.client.get("/api/databases").json()["databases"][0]
+        created = self.client.post("/api/databases", json={"name": "Test DB"}).json()
+        database = created["databases"][0]
+        
         with patch("apps.api.app.main.Assembler.delete_file") as delete_file:
             with patch("apps.api.app.main.Assembler.store_file") as store_file:
                 uploaded = self.client.post(
@@ -438,7 +456,8 @@ class ApiChatTests(unittest.TestCase):
         delete_file.assert_called_once_with(saved_path)
 
     def test_database_document_preview_route(self):
-        database = self.client.get("/api/databases").json()["databases"][0]
+        created = self.client.post("/api/databases", json={"name": "Test DB"}).json()
+        database = created["databases"][0]
         vector_db = VectorDatabase(collection_name=database["collection_name"])
         vector_db.add_documents(
             texts=["first chunk", "second chunk", "guide chunk"],

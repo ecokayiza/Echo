@@ -57,7 +57,12 @@ export default function App() {
               busy={state.busy}
               databases={state.databases}
               documents={workspace.databaseDocuments}
+              uploadJob={workspace.uploadJob}
+              onDeleteDocument={actions.openDeleteDatabaseDocumentDialog}
               onOpenEmbeddingSettings={actions.openEmbeddingModelSettings}
+              onRenameDocument={(document, name) => {
+                void actions.renameDatabaseDocument(document, name);
+              }}
               onOpenSettings={actions.openDatabaseSettings}
               onUploadFiles={(files) => {
                 void actions.uploadDatabaseDocuments(files);

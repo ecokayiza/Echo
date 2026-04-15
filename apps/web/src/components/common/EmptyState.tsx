@@ -1,6 +1,6 @@
 interface EmptyStateProps {
   title: string;
-  description: string;
+  description?: string;
   compact?: boolean;
 }
 

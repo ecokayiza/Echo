@@ -23,6 +23,7 @@ class EmbeddingModelSettings:
     model: str | None = Config.DEFAULT_EMBEDDING_MODEL
     api_key: str | None = None
     base_url: str | None = None
+    batch_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,14 @@ def _number_or_default(value, default: float | None) -> float | None:
     return float(value)
 
 
+def _int_or_default(value, default: int | None) -> int | None:
+    if value is None:
+        return default
+    if not isinstance(value, int) or isinstance(value, bool):
+        return default
+    return value
+
+
 def _bool_or_none(value) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -109,11 +118,13 @@ def normalize_embedding_model_settings(
     model = _trim_or_none(payload.get("model")) or Config.DEFAULT_EMBEDDING_MODEL
     api_key = _trim_or_none(payload.get("api_key"))
     base_url = _trim_or_none(payload.get("base_url"))
+    batch_size = _int_or_default(payload.get("batch_size"), None)
     return EmbeddingModelSettings(
         name=name,
         model=model,
         api_key=api_key,
         base_url=base_url,
+        batch_size=batch_size if batch_size and batch_size > 0 else None,
     )
 
 

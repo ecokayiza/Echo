@@ -1,4 +1,5 @@
 import os
+from collections.abc import Callable
 
 from ..chat.registry import normalize_embedding_model_settings
 from ..config import Config
@@ -22,13 +23,15 @@ class Assembler:
         self.embedder = embedder
         self.database = database
     
-    def store_file(self, filepath):
+    def store_file(self, filepath, progress_callback: Callable[[str, dict], None] | None = None):
         """
         Store file to vdb.
         filepath: should be absolute path.
         """
-        records = self._get_records(filepath)
+        records = self._get_records(filepath, progress_callback=progress_callback)
         self._records_to_db(records)
+        if progress_callback is not None:
+            progress_callback("storing_complete", {"record_count": len(records), "total_chunks": len(records)})
     
     def delete_file(self, filepath):
         """
@@ -64,19 +67,33 @@ class Assembler:
         print(f"Found {doc_count} documents for the query vector.")
         return results
     
-    def _get_records(self, file_path):
+    def _get_records(self, file_path, progress_callback: Callable[[str, dict], None] | None = None):
         """
         Get records objects from file_path, to create a record, we need:
             chunk text, embedding vector, metadata
         """
         _, ext = os.path.splitext(file_path)
+        source_name = os.path.basename(file_path)
+        _emit_progress(progress_callback, "load_started", source_name=source_name)
         data = self.data_loader.load(file_path)
+        _emit_progress(progress_callback, "load_complete", source_name=source_name)
+        _emit_progress(progress_callback, "chunk_started", source_name=source_name)
         chunks = self.chunker.chunk(data, ext)
+        _emit_progress(progress_callback, "chunk_complete", source_name=source_name, chunk_count=len(chunks))
         embedding_settings = resolve_database_embedding_settings(self.database) if self.database is not None else None
+        _emit_progress(progress_callback, "embedding_started", source_name=source_name, total_chunks=len(chunks))
         embeddings = self.embedder.embed_documents(
             chunks,
             normalize_embedding_model_settings(embedding_settings) if embedding_settings is not None else None,
+            progress_callback=lambda completed, total: _emit_progress(
+                progress_callback,
+                "embedding_progress",
+                source_name=source_name,
+                embedded_chunks=completed,
+                total_chunks=total,
+            ),
         )
+        _emit_progress(progress_callback, "storing_started", source_name=source_name, total_chunks=len(chunks))
         
         records = []
         for idx, chunk in enumerate(chunks):
@@ -142,3 +159,9 @@ if __name__ == "__main__":
     
     for record in records:
         record.print()
+
+
+def _emit_progress(progress_callback: Callable[[str, dict], None] | None, stage: str, **payload):
+    if progress_callback is None:
+        return
+    progress_callback(stage, payload)

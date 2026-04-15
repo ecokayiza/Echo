@@ -17,6 +17,8 @@ interface IconActionMenuProps {
   triggerLabel: string;
   disabled?: boolean;
   triggerClassName?: string;
+  showItemLabels?: boolean;
+  panelClassName?: string;
 }
 
 export function IconActionMenu({
@@ -24,6 +26,8 @@ export function IconActionMenu({
   triggerLabel,
   disabled = false,
   triggerClassName = "",
+  showItemLabels = false,
+  panelClassName = "",
 }: IconActionMenuProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
@@ -64,8 +68,8 @@ export function IconActionMenu({
     }
 
     const rect = trigger.getBoundingClientRect();
-    const menuWidth = Math.max(112, items.length * 52 + 16);
-    const menuHeight = 58;
+    const menuWidth = showItemLabels ? 188 : Math.max(112, items.length * 52 + 16);
+    const menuHeight = showItemLabels ? items.length * 44 + 12 : 58;
     const gutter = 4;
     const openDown = window.innerHeight - rect.bottom >= menuHeight || window.innerHeight - rect.bottom > rect.top;
     const centeredLeft = rect.left - menuWidth / 2;
@@ -103,7 +107,9 @@ export function IconActionMenu({
       {open
         ? createPortal(
             <div
-              className="icon-menu__panel"
+              className={`icon-menu__panel${showItemLabels ? " icon-menu__panel--labelled" : ""}${
+                panelClassName ? ` ${panelClassName}` : ""
+              }`}
               ref={panelRef}
               role="menu"
               style={{ top: `${position.top}px`, left: `${position.left}px` }}
@@ -114,7 +120,9 @@ export function IconActionMenu({
                   <button
                     key={item.key}
                     aria-label={item.label}
-                    className={`icon-menu__item${item.danger ? " icon-menu__item--danger" : ""}`}
+                    className={`icon-menu__item${showItemLabels ? " icon-menu__item--labelled" : ""}${
+                      item.danger ? " icon-menu__item--danger" : ""
+                    }`}
                     onClick={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -126,6 +134,7 @@ export function IconActionMenu({
                     type="button"
                   >
                     <Icon />
+                    {showItemLabels ? <span>{item.label}</span> : null}
                   </button>
                 );
               })}

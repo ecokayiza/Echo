@@ -55,6 +55,22 @@ class VectorDatabase:
         if results and results.get("ids"):
             self.collection.delete(where=where)
 
+    def update_document_metadata(self, where: dict[str, Any], updates: dict[str, Any]) -> bool:
+        """Update metadata for all documents matching a metadata filter."""
+        results = self.collection.get(where=where)
+        ids = results.get("ids") or []
+        metadatas = results.get("metadatas") or []
+        if not ids:
+            return False
+
+        next_metadatas = []
+        for metadata in metadatas:
+            current = metadata if isinstance(metadata, dict) else {}
+            next_metadatas.append({**current, **updates})
+
+        self.collection.update(ids=ids, metadatas=next_metadatas)
+        return True
+
     def clear_collection(self):
         """Delete and recreate the active collection."""
         self.client.delete_collection(self.collection_name)
@@ -68,8 +84,22 @@ class VectorDatabase:
         self.client.delete_collection(self.collection_name)
 
     def count(self) -> int:
-        """Return the current collection size."""
+        """Return the current collection size (number of chunks)."""
         return int(self.collection.count())
+
+    def file_count(self) -> int:
+        """Return the number of unique files/documents in the collection."""
+        results = self.collection.get(include=["metadatas"])
+        unique_keys = set()
+        for metadata in results.get("metadatas") or []:
+            if not isinstance(metadata, dict):
+                continue
+            file_path = str(metadata.get("file_path") or "").strip() or None
+            source_name = str(metadata.get("source_name") or file_path or "Untitled").strip() or "Untitled"
+            source_type = str(metadata.get("source_type") or "unknown").strip() or "unknown"
+            key = file_path or f"{source_name}:{source_type}"
+            unique_keys.add(key)
+        return len(unique_keys)
 
     def peek(self, limit: int = 5):
         """Peek at a few documents in the collection."""

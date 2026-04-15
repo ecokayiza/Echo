@@ -6,6 +6,10 @@ function normalizeNumber(value: number | null | undefined, fallback: number | nu
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+function normalizePositiveInteger(value: number | null | undefined, fallback: number | null) {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
 function normalizeBoolean(value: boolean | null | undefined) {
   return typeof value === "boolean" ? value : null;
 }
@@ -28,6 +32,7 @@ export function createEmptyEmbeddingModel(index: number, initial?: Partial<Embed
     model: initial?.model ?? null,
     api_key: initial?.api_key ?? null,
     base_url: initial?.base_url ?? null,
+    batch_size: initial?.batch_size ?? null,
   };
 }
 
@@ -55,6 +60,7 @@ export function normalizeEmbeddingModelConfig(
     model: trimOrNull(config?.model),
     api_key: trimOrNull(config?.api_key),
     base_url: trimOrNull(config?.base_url),
+    batch_size: normalizePositiveInteger(config?.batch_size, null),
   };
 }
 

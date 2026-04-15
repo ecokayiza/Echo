@@ -65,9 +65,7 @@ def normalize_database_settings_document(document: DatabaseSettingsDocument | di
         raw_databases = []
     databases = [normalize_database_settings(item) for item in raw_databases if isinstance(item, (dict, DatabaseSettings))]
     if not databases:
-        default_database = _default_database_settings()
-        databases = [default_database]
-        active_database_id = default_database.id
+        active_database_id = None
     else:
         active_database_id = _trim(payload.get("active_database_id"))
         if not any(database.id == active_database_id for database in databases):
@@ -181,9 +179,7 @@ def delete_database_settings(database_id: str) -> DatabaseSettingsDocument:
     if len(remaining) == len(document.databases):
         raise ValueError("Database not found.")
     if not remaining:
-        default_database = _default_database_settings()
-        remaining = [default_database]
-        active_database_id = default_database.id
+        active_database_id = None
     else:
         active_database_id = document.active_database_id if document.active_database_id != database_id else remaining[0].id
     return save_database_settings_document(DatabaseSettingsDocument(active_database_id=active_database_id, databases=remaining))
