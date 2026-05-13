@@ -7,14 +7,25 @@ from langchain_core.tools import BaseTool, tool
 
 from .database_search import database_search
 from .skill_loader import load_skill
+from .web_fetch import web_fetch
 from .web_search import web_search
+from .workspace_files import workspace_edit_file, workspace_list_files, workspace_read_file, workspace_write_file
 
 ToolRunner = Callable[[str], Any]
 
 
 def build_retrieve_tools(tool_runner: ToolRunner | None = None) -> list[BaseTool]:
     """Build the tool set exposed to the workflow retrieve node."""
-    tools: list[BaseTool] = [load_skill, database_search, web_search]
+    tools: list[BaseTool] = [
+        load_skill,
+        database_search,
+        web_search,
+        web_fetch,
+        workspace_list_files,
+        workspace_read_file,
+        workspace_write_file,
+        workspace_edit_file,
+    ]
     if tool_runner is not None:
 
         @tool

@@ -8,10 +8,15 @@ interface WorkflowPanelProps {
 
 export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
   const logEntries = workflow ? buildWorkflowLogEntries(workflow) : [];
+  const roundCount = workflow?.retrieve_round ?? 0;
 
   return (
-    <SectionCard eyebrow="Workflow">
-      <div aria-label="Workflow modern graph" style={{ padding: "20px 0" }}>
+    <SectionCard
+      actions={workflow ? <span className="workflow-round-pill">Round {roundCount}</span> : null}
+      className="section-card--fill"
+      eyebrow="Workflow"
+    >
+      <div aria-label="Workflow modern graph" className="workflow-panel__graph-wrap">
         <WorkflowGraph
           nodes={workflow?.node_statuses ?? []}
           activeNode={workflow?.active_node || null}
@@ -19,31 +24,17 @@ export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
         />
       </div>
 
-      {workflow ? (
-        <>
-          <div className="workflow-copy">
-            <span className="workflow-copy__label">Query</span>
-            <p>{workflow.query}</p>
-          </div>
-
-          <div className="workflow-copy">
-            <span className="workflow-copy__label">Result</span>
-            <p>{workflow.errors.length > 0 ? workflow.errors.join(" ") : workflow.answer || workflow.status}</p>
-          </div>
-
-          {logEntries.length > 0 ? (
-            <div className="workflow-copy">
-              <span className="workflow-copy__label">Logs</span>
-              <div className="workflow-log-list">
-                {logEntries.map((entry, index) => (
-                  <div key={`${entry.label}-${index}`} className="workflow-log-list__item">
-                    <strong>[{entry.label}]</strong> {entry.message}
-                  </div>
-                ))}
+      {workflow && logEntries.length > 0 ? (
+        <div className="workflow-copy">
+          <span className="workflow-copy__label">Logs</span>
+          <div className="workflow-log-list">
+            {logEntries.map((entry, index) => (
+              <div key={`${entry.label}-${index}`} className="workflow-log-list__item">
+                <strong>[{entry.label}]</strong> {entry.message}
               </div>
-            </div>
-          ) : null}
-        </>
+            ))}
+          </div>
+        </div>
       ) : null}
     </SectionCard>
   );
@@ -54,18 +45,26 @@ function buildWorkflowLogEntries(workflow: WorkflowSnapshot) {
     .filter((node) => node.detail)
     .map((node) => ({
       label: node.node,
-      message: String(node.detail).trim(),
+      message: formatWorkflowLogMessage(node.detail),
     }));
+
+  const errorEntries = workflow.errors.map((error) => ({
+    label: "error",
+    message: formatWorkflowLogMessage(error),
+  }));
 
   const extraEntries = workflow.logs
     .filter((entry) => entry.message)
     .map((entry) => ({
       label: entry.node || entry.level || "log",
-      message: String(entry.message).trim(),
+      message: formatWorkflowLogMessage(entry.message),
     }));
 
   const seen = new Set<string>();
-  return [...stepEntries, ...extraEntries].filter((entry) => {
+  return [...stepEntries, ...errorEntries, ...extraEntries].filter((entry) => {
+    if (!entry.message) {
+      return false;
+    }
     const key = `${entry.label}::${entry.message}`;
     if (seen.has(key)) {
       return false;
@@ -73,4 +72,16 @@ function buildWorkflowLogEntries(workflow: WorkflowSnapshot) {
     seen.add(key);
     return true;
   });
+}
+
+function formatWorkflowLogMessage(value: unknown) {
+  const rawOutputStart = "LLM raw output:";
+  const maxLength = 220;
+  const text = String(value ?? "").trim();
+  const rawIndex = text.indexOf(rawOutputStart);
+  const summary = rawIndex >= 0 ? text.slice(0, rawIndex).trim() : text;
+  if (summary.length <= maxLength) {
+    return summary;
+  }
+  return `${summary.slice(0, maxLength).trimEnd()}...`;
 }

@@ -2,7 +2,6 @@ import {
   ArrowUpTrayIcon,
   CheckIcon,
   Cog6ToothIcon,
-  CpuChipIcon,
   DocumentTextIcon,
   PencilSquareIcon,
   TrashIcon,
@@ -23,12 +22,10 @@ interface DatabasePanelProps {
   databases: DatabaseRecord[];
   documents: DatabaseDocumentRecord[];
   uploadJob: UploadJobRecord | null;
-  onOpenEmbeddingSettings: () => void;
   onOpenSettings: () => void;
   onDeleteDocument: (document: DatabaseDocumentRecord) => void;
   onRenameDocument: (document: DatabaseDocumentRecord, name: string) => void;
   onUploadFiles: (files: File[]) => void;
-  onSelect: (databaseId: string) => void;
 }
 
 export function DatabasePanel({
@@ -37,24 +34,23 @@ export function DatabasePanel({
   databases,
   documents,
   uploadJob,
-  onOpenEmbeddingSettings,
   onOpenSettings,
   onDeleteDocument,
   onRenameDocument,
   onUploadFiles,
-  onSelect,
 }: DatabasePanelProps) {
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [editingDocumentId, setEditingDocumentId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const activeDatabase = databases.find((database) => database.id === activeDatabaseId) ?? null;
-  const currentUploadDisplay =
+  const uploadError = uploadJob?.status === "failed" ? uploadJob.error || uploadJob.message : null;
+  const currentFileName =
     uploadJob?.current_file_name ??
     uploadJob?.files.find((file) => file.status === "processing")?.source_name ??
     uploadJob?.files.find((file) => file.status === "queued")?.source_name ??
     uploadJob?.files[0]?.source_name ??
-    uploadJob?.message ??
     null;
+  const currentStatusDisplay = uploadError ?? uploadJob?.message ?? null;
 
   useEffect(() => {
     if (!editingDocumentId) {
@@ -106,15 +102,6 @@ export function DatabasePanel({
       actions={
         <div className="section-card__actions">
           <button
-            aria-label="Open embedding model settings"
-            className="model-settings-button"
-            disabled={busy}
-            onClick={onOpenEmbeddingSettings}
-            type="button"
-          >
-            <CpuChipIcon />
-          </button>
-          <button
             aria-label="Open database settings"
             className="model-settings-button"
             disabled={busy}
@@ -126,36 +113,19 @@ export function DatabasePanel({
         </div>
       }
     >
-      {databases.length === 0 ? (
-        <EmptyState compact title="No Databases" />
+      {!activeDatabase ? (
+        <EmptyState compact title={databases.length > 0 ? "No Database Selected" : "No Databases"} />
       ) : (
         <>
-          <ul className="database-list">
-            {databases.map((database) => {
-              const isActive = database.id === activeDatabaseId;
-              return (
-                <li key={database.id} className="database-list__item">
-                  <button
-                    aria-pressed={isActive}
-                    className={`database-card${isActive ? " database-card--active" : ""}`}
-                    disabled={busy}
-                    onClick={() => {
-                      onSelect(database.id);
-                    }}
-                    type="button"
-                  >
-                    <div className="database-card__row">
-                      <strong className="database-card__title" title={database.name}>
-                        {database.name}
-                      </strong>
-                      <span className="database-card__count">{formatNumber(database.document_count)} files</span>
-                    </div>
-                    <p className="database-card__meta">{database.embedding_model_name}</p>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <div className="database-card database-card--active database-card--summary">
+            <div className="database-card__row">
+              <strong className="database-card__title" title={activeDatabase.name}>
+                {activeDatabase.name}
+              </strong>
+              <span className="database-card__count">{formatNumber(activeDatabase.document_count)} files</span>
+            </div>
+            <p className="database-card__meta">{activeDatabase.embedding_model_name}</p>
+          </div>
 
           <section className="database-documents" aria-label="Database files">
             <div className="database-documents__header">
@@ -197,9 +167,9 @@ export function DatabasePanel({
                 <div className="upload-progress-card__row">
                   <div className="upload-progress-card__copy">
                     <strong className="upload-progress-card__title">
-                      Embedding
+                      {uploadJob.status === "failed" ? "Indexing Failed" : "Embedding"}
                     </strong>
-                    <span className="upload-progress-card__meta">{currentUploadDisplay}</span>
+                    <span className="upload-progress-card__meta">{currentFileName}</span>
                   </div>
                   <span className="upload-progress-card__percent">{Math.round(uploadJob.progress)}%</span>
                 </div>
@@ -219,20 +189,20 @@ export function DatabasePanel({
                   <ul className="upload-progress-file-list">
                     {uploadJob.files.map((file) => (
                       <li key={file.id} className="upload-progress-file-list__item">
-                        <div className="upload-progress-file-list__row">
-                          <strong className="upload-progress-file-list__title" title={file.source_name}>
-                            {file.source_name}
-                          </strong>
-                          <span className="upload-progress-file-list__meta">
+                        <div className="upload-progress-file-list__row upload-progress-file-list__row--single">
+                          <span
+                            className="upload-progress-file-list__meta upload-progress-file-list__meta--single"
+                            title={file.error || file.message || undefined}
+                          >
                             {file.status === "completed"
-                              ? "Done"
+                              ? `Done: ${file.source_name}`
                               : file.status === "skipped"
-                                ? "Skipped"
+                                ? `Skipped: ${file.source_name}`
                               : file.status === "failed"
-                                ? "Failed"
+                                ? file.error || "Failed"
                                 : file.status === "processing"
-                                  ? `${formatNumber(file.embedded_chunks)}/${formatNumber(file.chunk_count)} chunks`
-                                  : "Queued"}
+                                  ? file.message || `${formatNumber(file.embedded_chunks)}/${formatNumber(file.chunk_count)} chunks`
+                                  : `Queued: ${file.source_name}`}
                           </span>
                         </div>
                       </li>

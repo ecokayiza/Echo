@@ -74,6 +74,7 @@ class WorkflowTracker:
             "answer": state.get("prepared_answer", ""),
             "status": self.status,
             "active_node": self.active_node,
+            "retrieve_round": state.get("retrieve_round", 0),
             "tool_name": tool_name,
             "node_statuses": [dict(item) for item in self.node_statuses],
             "logs": [dict(item) for item in self.logs],

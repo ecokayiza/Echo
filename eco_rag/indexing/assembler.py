@@ -5,6 +5,7 @@ from ..chat.registry import normalize_embedding_model_settings
 from ..config import Config
 from ..domain.schema import RAGRecord, RAGMetadata, ExtraAttributes
 from .database_registry import DatabaseSettings, resolve_database_embedding_settings
+from .errors import IndexingError
 
 # This is the interface for outer files
 # provide APIs to finish one whole process like:
@@ -75,24 +76,55 @@ class Assembler:
         _, ext = os.path.splitext(file_path)
         source_name = os.path.basename(file_path)
         _emit_progress(progress_callback, "load_started", source_name=source_name)
-        data = self.data_loader.load(file_path)
+        try:
+            data = self.data_loader.load(
+                file_path,
+                progress_callback=lambda stage, payload: _emit_loader_progress(
+                    progress_callback,
+                    stage,
+                    source_name,
+                    payload,
+                ),
+            )
+        except IndexingError:
+            raise
+        except Exception as exc:
+            raise IndexingError("loading", f"Could not load {source_name}: {exc}") from exc
         _emit_progress(progress_callback, "load_complete", source_name=source_name)
+
         _emit_progress(progress_callback, "chunk_started", source_name=source_name)
-        chunks = self.chunker.chunk(data, ext)
+        try:
+            chunks = self.chunker.chunk(data, ext)
+        except IndexingError:
+            raise
+        except Exception as exc:
+            raise IndexingError("chunking", f"Could not chunk {source_name}: {exc}") from exc
         _emit_progress(progress_callback, "chunk_complete", source_name=source_name, chunk_count=len(chunks))
-        embedding_settings = resolve_database_embedding_settings(self.database) if self.database is not None else None
+
+        try:
+            embedding_settings = resolve_database_embedding_settings(self.database) if self.database is not None else None
+        except ValueError as exc:
+            raise IndexingError("embedding", str(exc)) from exc
+
         _emit_progress(progress_callback, "embedding_started", source_name=source_name, total_chunks=len(chunks))
-        embeddings = self.embedder.embed_documents(
-            chunks,
-            normalize_embedding_model_settings(embedding_settings) if embedding_settings is not None else None,
-            progress_callback=lambda completed, total: _emit_progress(
-                progress_callback,
-                "embedding_progress",
-                source_name=source_name,
-                embedded_chunks=completed,
-                total_chunks=total,
-            ),
-        )
+        try:
+            embeddings = self.embedder.embed_documents(
+                chunks,
+                normalize_embedding_model_settings(embedding_settings) if embedding_settings is not None else None,
+                progress_callback=lambda completed, total: _emit_progress(
+                    progress_callback,
+                    "embedding_progress",
+                    source_name=source_name,
+                    embedded_chunks=completed,
+                    total_chunks=total,
+                ),
+            )
+        except IndexingError:
+            raise
+        except Exception as exc:
+            raise IndexingError("embedding", f"Could not embed {source_name}: {exc}") from exc
+        if len(embeddings) != len(chunks):
+            raise IndexingError("embedding", f"Expected {len(chunks)} embedding vector(s), got {len(embeddings)}.")
         _emit_progress(progress_callback, "storing_started", source_name=source_name, total_chunks=len(chunks))
         
         records = []
@@ -121,12 +153,15 @@ class Assembler:
         formatted_records = [r.to_db_format() for r in records]
         
         if formatted_records:
-            self.db.add_documents(
-                ids=[r["id"] for r in formatted_records],
-                texts=[r["document"] for r in formatted_records],
-                embeddings=[r["vector"] for r in formatted_records],
-                metadatas=[r["metadata"] for r in formatted_records]
-            )
+            try:
+                self.db.add_documents(
+                    ids=[r["id"] for r in formatted_records],
+                    texts=[r["document"] for r in formatted_records],
+                    embeddings=[r["vector"] for r in formatted_records],
+                    metadatas=[r["metadata"] for r in formatted_records]
+                )
+            except Exception as exc:
+                raise IndexingError("storing", f"Could not save vectors to the database: {exc}") from exc
     
 if __name__ == "__main__":
     from .loader import DataLoaderFactory
@@ -165,3 +200,12 @@ def _emit_progress(progress_callback: Callable[[str, dict], None] | None, stage:
     if progress_callback is None:
         return
     progress_callback(stage, payload)
+
+
+def _emit_loader_progress(
+    progress_callback: Callable[[str, dict], None] | None,
+    stage: str,
+    source_name: str,
+    payload: dict,
+):
+    _emit_progress(progress_callback, stage, source_name=source_name, **payload)

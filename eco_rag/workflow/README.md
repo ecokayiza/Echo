@@ -44,19 +44,23 @@
 允许格式：
 
 ```text
-[plan]
+<plan>
 ...
-[answer]
+</plan>
+<answer>
 ...
+</answer>
 ```
 
 或：
 
 ```text
-[plan]
+<plan>
 ...
-[retrieve]
+</plan>
+<retrieve>
 web_search("...")
+</retrieve>
 ```
 
 ### `retrieve`
@@ -110,7 +114,6 @@ web_search("...")
 
 - session 中始终只保留一个 system prompt
 - 不允许 provider-native tool calls
-- `prompt_truncate_chars` 控制 prompt 文本截断
 
 ## Flat Workflow Memory
 
@@ -244,9 +247,10 @@ live draft 定义见：
 
 当前只保留：
 
-- `max_context_messages`
+- `chunk_size`
+- `chunk_overlap`
 - `max_retrieve_rounds`
-- `prompt_truncate_chars`
+- `use_marker_pdf_loader`
 
 模型配置：
 

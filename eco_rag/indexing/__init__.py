@@ -12,6 +12,7 @@ from .database_registry import (
     select_database_settings,
 )
 from .embedder import HuggingFaceEmbedder, OpenAICompatibleEmbedder
+from .errors import EmbeddingError, IndexingError
 
 try:
     from .chunker import ChunkerFactory, MarkdownChunker, TextChunker
@@ -41,8 +42,10 @@ __all__ = [
     "DatabaseSettingsDocument",
     "delete_database_settings",
     "HuggingFaceEmbedder",
+    "EmbeddingError",
     "ensure_database_settings_document",
     "get_active_database_settings",
+    "IndexingError",
     "list_database_settings",
     "OpenAICompatibleEmbedder",
     "MarkDownDataLoader",

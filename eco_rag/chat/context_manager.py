@@ -9,13 +9,17 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
 from ..config import Config
-from ..settings import load_app_settings
+from ..workflow_sections import (
+    parse_workflow_sections,
+    render_workflow_sections,
+    workflow_section_entries,
+)
 from .chat_model import Message
 
 USAGE_KEYS = ("prompt_tokens", "prompt_cache_hit_tokens", "completion_tokens", "total_tokens")
 READ_ONLY_MESSAGE_TYPES = {"plan", "think", "tool"}
 WORKFLOW_ANSWER_PROXY_TYPES = {"plan", "think"}
-WORKFLOW_SECTION_PATTERN = re.compile(r"(?ms)^\[([a-z_]+)\]\s*(.*?)(?=^\[[a-z_]+\]\s*|\Z)")
+DEFAULT_MAX_CONTEXT_MESSAGES = 100
 
 
 def utc_now() -> str:
@@ -158,10 +162,7 @@ class Sessions:
         for message in reversed(session["messages"]):
             if message.role == "assistant" and message.content.strip():
                 content = message.content.strip()
-                if "[answer]" in content:
-                    preview = content.split("[answer]")[-1].strip()[:80]
-                else:
-                    preview = content[:80]
+                preview = (_workflow_sections(content).get("answer") or content)[:80]
                 break
         
         # Fallback to the latest non-system message if no assistant answer is found
@@ -236,9 +237,7 @@ class Messages:
         default_system_prompt: str | None = None,
     ):
         self.sessions = sessions
-        self.max_context_messages = (
-            load_app_settings().max_context_messages if max_context_messages is None else max_context_messages
-        )
+        self.max_context_messages = DEFAULT_MAX_CONTEXT_MESSAGES if max_context_messages is None else max_context_messages
         self.preserve_system_messages = preserve_system_messages
         self.default_system_prompt = (default_system_prompt or "").strip()
 
@@ -413,7 +412,7 @@ class Messages:
         )
 
     def _compact_recent(self, messages: list[Message]) -> list[Message]:
-        """Drop tool records and keep only one reasoning message per workflow turn."""
+        """Drop tool records and collapse each workflow turn into one assistant message."""
         recent = [message.model_copy(deep=True) for message in messages if message.role != "system"]
         compacted: list[Message] = []
         index = 0
@@ -440,24 +439,31 @@ class Messages:
         return compacted
 
     def _workflow_context_message(self, turn_id: str, messages: list[Message]) -> Message | None:
-        """Select the one persisted reasoning record that should survive into next-turn context."""
-        selected = next(
-            (
-                item
-                for item in reversed(messages)
-                if item.role == "assistant" and item.message_type in {"think", "plan"}
-            ),
-            None,
-        )
-        if selected is None:
-            return None
-        content = _sanitize_workflow_context(selected.content, selected.message_type or "assistant")
-        if not content:
+        """Collapse one workflow turn into one assistant message for next-turn context."""
+        entries: list[tuple[str, str]] = []
+        has_answer = False
+        for message in messages:
+            if message.role != "assistant":
+                continue
+            message_entries = [
+                (name, block)
+                for name, block in workflow_section_entries(message.content)
+                if name in {"plan", "retrieve", "think", "answer"} and block
+            ]
+            if message_entries:
+                entries.extend(message_entries)
+                has_answer = has_answer or any(name == "answer" for name, _block in message_entries)
+                continue
+            if message.message_type == "answer" and message.content.strip() and not has_answer:
+                entries.append(("answer", message.content.strip()))
+                has_answer = True
+
+        if not entries:
             return None
         return Message(
             role="assistant",
-            content=content,
-            message_type=selected.message_type,
+            content=render_workflow_sections(entries),
+            message_type="workflow",
             workflow_turn_id=turn_id,
         )
 
@@ -503,16 +509,6 @@ class Messages:
         return session
 
 
-def _sanitize_workflow_context(content: str, message_type: str) -> str:
-    """Keep only the reasoning block from a persisted plan or think message."""
-    sections = _workflow_sections(content)
-    block_name = message_type.strip().lower()
-    block = sections.get(block_name)
-    if not block:
-        return (content or "").strip()
-    return f"[{block_name}]\n{block}".strip()
-
-
 def _is_workflow_answer_proxy(message: Message) -> bool:
     """Return whether a persisted plan/think message also carries the user-facing answer block."""
     return (
@@ -524,21 +520,15 @@ def _is_workflow_answer_proxy(message: Message) -> bool:
 
 def _replace_workflow_answer(content: str, answer: str) -> str:
     """Replace only the answer block inside one persisted workflow assistant message."""
-    sections = _workflow_sections(content)
-    if not sections.get("answer"):
+    entries = workflow_section_entries(content)
+    if not any(name == "answer" and block for name, block in entries):
         raise ValueError("Workflow message does not contain an answer block.")
 
-    parts: list[str] = []
-    for match in WORKFLOW_SECTION_PATTERN.finditer((content or "").strip()):
-        name = match.group(1).strip().lower()
-        block = answer.strip() if name == "answer" else match.group(2).strip()
-        parts.append(f"[{name}]\n{block}".strip())
-    return "\n\n".join(parts).strip()
+    return render_workflow_sections(
+        [(name, answer.strip() if name == "answer" else block) for name, block in entries]
+    )
 
 
 def _workflow_sections(content: str) -> dict[str, str]:
-    """Parse workflow bracket blocks into a normalized section map."""
-    return {
-        match.group(1).strip().lower(): match.group(2).strip()
-        for match in WORKFLOW_SECTION_PATTERN.finditer((content or "").strip())
-    }
+    """Parse workflow blocks into a normalized section map."""
+    return parse_workflow_sections(content)

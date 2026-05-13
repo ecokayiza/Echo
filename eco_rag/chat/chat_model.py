@@ -173,7 +173,7 @@ class BaseChatModel(ABC):
         model: str | None = None,
         temperature: float = 1.0,
         top_p: float | None = None,
-        enable_thinking: bool | None = None,
+        custom_request_params: Dict[str, Any] | None = None,
     ):
         """Create the shared provider client."""
         # The OpenAI client treats base_url as the prefix to endpoints (like /chat/completions).
@@ -185,7 +185,7 @@ class BaseChatModel(ABC):
         self.model = model
         self.temperature = temperature
         self.top_p = top_p
-        self.enable_thinking = enable_thinking
+        self.custom_request_params = dict(custom_request_params) if isinstance(custom_request_params, dict) else None
 
     @abstractmethod
     async def generate_response(
@@ -237,11 +237,13 @@ class OpenAIChatModel(BaseChatModel):
             payload["stream_options"] = {"include_usage": True}
         if include_optional and self.top_p is not None:
             payload["top_p"] = self.top_p
-        if include_optional and self.enable_thinking is not None:
-            extra_body = payload.get("extra_body")
-            if not isinstance(extra_body, dict):
-                extra_body = {}
-            extra_body["enable_thinking"] = self.enable_thinking
+        if include_optional:
+            existing_extra_body = payload.get("extra_body")
+            extra_body = dict(existing_extra_body) if isinstance(existing_extra_body, dict) else {}
+            extra_body.update(self.custom_request_params or {})
+        else:
+            extra_body = {}
+        if extra_body:
             payload["extra_body"] = extra_body
         return payload
 
@@ -254,7 +256,7 @@ class OpenAIChatModel(BaseChatModel):
         stream: bool = False,
         **kwargs,
     ):
-        use_fallback = self.top_p is not None or self.enable_thinking is not None
+        use_fallback = self.top_p is not None or bool(self.custom_request_params)
         try:
             return await self.client.chat.completions.create(
                 **self._build_request_payload(

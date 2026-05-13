@@ -70,7 +70,7 @@
 
 `Thoughts` 不会显示：
 
-- 内嵌的 `[answer]`
+- 内嵌的 `<answer>...</answer>`
 - `tool_back`
 - routine workflow log spam
 

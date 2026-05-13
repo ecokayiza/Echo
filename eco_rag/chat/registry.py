@@ -14,7 +14,7 @@ class ChatModelSettings:
     base_url: str | None = None
     temperature: float = 1.0
     top_p: float | None = None
-    enable_thinking: bool | None = None
+    custom_request_params: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -76,15 +76,9 @@ def _int_or_default(value, default: int | None) -> int | None:
     return value
 
 
-def _bool_or_none(value) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "1", "yes", "on"}:
-            return True
-        if normalized in {"false", "0", "no", "off"}:
-            return False
+def _dict_or_none(value) -> dict | None:
+    if isinstance(value, dict):
+        return dict(value) if value else None
     return None
 
 
@@ -96,7 +90,7 @@ def normalize_chat_model_settings(settings: ChatModelSettings | dict | None = No
     base_url = _trim_or_none(payload.get("base_url"))
     temperature = _number_or_default(payload.get("temperature"), 1.0)
     top_p = _number_or_default(payload.get("top_p"), None)
-    enable_thinking = _bool_or_none(payload.get("enable_thinking"))
+    custom_request_params = _dict_or_none(payload.get("custom_request_params"))
     return ChatModelSettings(
         name=name,
         model=model,
@@ -104,7 +98,7 @@ def normalize_chat_model_settings(settings: ChatModelSettings | dict | None = No
         base_url=base_url,
         temperature=temperature if temperature is not None else 1.0,
         top_p=top_p,
-        enable_thinking=enable_thinking,
+        custom_request_params=custom_request_params,
     )
 
 
@@ -141,7 +135,8 @@ def default_model_settings_document() -> ModelSettingsDocument:
 
 def _is_legacy_chat_settings(payload: dict) -> bool:
     return "chat_models" not in payload and any(
-        key in payload for key in ("model", "api_key", "base_url", "temperature", "top_p", "enable_thinking")
+        key in payload
+        for key in ("model", "api_key", "base_url", "temperature", "top_p", "custom_request_params")
     )
 
 
@@ -285,5 +280,5 @@ def build_chat_model(settings: ChatModelSettings | None = None) -> BaseChatModel
         model=resolved.model,
         temperature=resolved.temperature,
         top_p=resolved.top_p,
-        enable_thinking=resolved.enable_thinking,
+        custom_request_params=resolved.custom_request_params,
     )

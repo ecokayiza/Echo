@@ -6,11 +6,10 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from ..skills import list_available_skills
-from ..settings import load_app_settings
 from ..tools import build_retrieve_tools
 from ..workflow.prompts import default_system_prompt
 from .chat_model import BaseChatModel, Message
-from .context_manager import Messages, Sessions, default_session_title
+from .context_manager import DEFAULT_MAX_CONTEXT_MESSAGES, Messages, Sessions, default_session_title
 from .registry import ChatModelSettings, build_chat_model
 
 if TYPE_CHECKING:
@@ -64,9 +63,7 @@ class ChatService:
         self.base_dir = base_dir
         self.tool_runner = tool_runner
         self.workflow_factory = workflow_factory
-        self.max_context_messages = (
-            load_app_settings().max_context_messages if max_context_messages is None else max_context_messages
-        )
+        self.max_context_messages = DEFAULT_MAX_CONTEXT_MESSAGES if max_context_messages is None else max_context_messages
         self.preserve_system_messages = preserve_system_messages
 
     def list_sessions(self) -> list[dict[str, Any]]:

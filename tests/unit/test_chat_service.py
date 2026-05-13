@@ -24,13 +24,13 @@ def _snapshot(*, status: str, answer: str = ""):
 
 
 class FakeWorkflowService:
-    async def stream_chat(self, question, *, context=None, session_id=None, user_message_id=None):
+    async def stream_chat(self, question, *, context=None, workflow_turn_id=None):
         yield {"event": "state", "data": _snapshot(status="running")}
         yield {
             "event": "record",
             "data": {
                 "role": "assistant",
-                "content": "[plan]\nThis can be answered directly.\n[answer]\nhello",
+                "content": "<plan>\nThis can be answered directly.\n</plan>\n<answer>\nhello\n</answer>",
                 "message_type": "plan",
                 "workflow_turn_id": "turn-1",
                 "token_usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
@@ -44,7 +44,7 @@ class FakeWorkflowService:
                 "records": [
                     {
                         "role": "assistant",
-                        "content": "[plan]\nThis can be answered directly.\n[answer]\nhello",
+                        "content": "<plan>\nThis can be answered directly.\n</plan>\n<answer>\nhello\n</answer>",
                         "message_type": "plan",
                         "workflow_turn_id": "turn-1",
                         "token_usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},

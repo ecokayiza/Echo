@@ -1,4 +1,4 @@
-import type { ChatModelConfig, EmbeddingModelConfig, ModelSettingsDocument } from "@/types/chat";
+import type { ChatModelConfig, EmbeddingModelConfig, JsonObject, ModelSettingsDocument } from "@/types/chat";
 
 import { trimOrNull } from "./format";
 
@@ -10,8 +10,16 @@ function normalizePositiveInteger(value: number | null | undefined, fallback: nu
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function normalizeBoolean(value: boolean | null | undefined) {
-  return typeof value === "boolean" ? value : null;
+function normalizeJsonObject(value: unknown): JsonObject | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(JSON.stringify(value)) as JsonObject;
+  } catch {
+    return null;
+  }
 }
 
 export function createEmptyChatModel(index: number, initial?: Partial<ChatModelConfig>): ChatModelConfig {
@@ -22,7 +30,7 @@ export function createEmptyChatModel(index: number, initial?: Partial<ChatModelC
     base_url: initial?.base_url ?? null,
     temperature: initial?.temperature ?? 1,
     top_p: initial?.top_p ?? null,
-    enable_thinking: initial?.enable_thinking ?? false,
+    custom_request_params: normalizeJsonObject(initial?.custom_request_params),
   };
 }
 
@@ -47,7 +55,7 @@ export function normalizeChatModelConfig(
     base_url: trimOrNull(config?.base_url),
     temperature: normalizeNumber(config?.temperature, 1) ?? 1,
     top_p: normalizeNumber(config?.top_p, null),
-    enable_thinking: normalizeBoolean(config?.enable_thinking),
+    custom_request_params: normalizeJsonObject(config?.custom_request_params),
   };
 }
 

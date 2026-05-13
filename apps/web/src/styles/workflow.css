@@ -1,0 +1,49 @@
+.workflow-copy {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.68rem 0.74rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-soft);
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workflow-log-list {
+  display: grid;
+  gap: 0.24rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.workflow-log-list__item {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--muted);
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+
+.workflow-panel__graph-wrap {
+  padding: 20px 0;
+}
+
+.workflow-round-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.45rem;
+  padding: 0 0.52rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-soft);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}

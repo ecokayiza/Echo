@@ -66,6 +66,8 @@ export interface UploadJobFileRecord {
   chunk_count: number;
   embedded_chunks: number;
   progress: number;
+  message: string;
+  error: string | null;
 }
 
 export interface UploadJobRecord {
@@ -81,6 +83,9 @@ export interface UploadJobRecord {
   current_file_name: string | null;
   files: UploadJobFileRecord[];
   error: string | null;
+  error_stage: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface WorkflowNodeStatus {
@@ -100,6 +105,7 @@ export interface WorkflowSnapshot {
   query: string;
   answer: string;
   status: string;
+  retrieve_round?: number | null;
   node_statuses: WorkflowNodeStatus[];
   active_node: string | null;
   tool_name?: string | null;
@@ -118,6 +124,12 @@ export interface HealthResponse {
   model: string | null;
 }
 
+export type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
+
 export interface ChatModelConfig {
   name: string;
   model: string | null;
@@ -125,7 +137,7 @@ export interface ChatModelConfig {
   base_url: string | null;
   temperature: number;
   top_p: number | null;
-  enable_thinking: boolean | null;
+  custom_request_params: JsonObject | null;
 }
 
 export interface EmbeddingModelConfig {
@@ -141,6 +153,32 @@ export interface ModelSettingsDocument {
   active_embedding_model: string | null;
   chat_models: ChatModelConfig[];
   embedding_models: EmbeddingModelConfig[];
+}
+
+export interface ModelApiTestResponse {
+  ok: boolean;
+  message: string;
+}
+
+export interface AppSettingsDocument {
+  chunk_size: number;
+  chunk_overlap: number;
+  max_retrieve_rounds: number;
+  use_marker_pdf_loader: boolean;
+  web_search_backend: "auto" | "duckduckgo" | "bing" | "baidu";
+}
+
+export interface SkillRecord {
+  name: string;
+  description: string;
+  content: string;
+  enabled: boolean;
+  default: boolean;
+  protected: boolean;
+}
+
+export interface SkillSettingsDocument {
+  skills: SkillRecord[];
 }
 
 export interface MetaResponse {

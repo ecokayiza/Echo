@@ -62,7 +62,7 @@
 {
   "id": "message-3",
   "role": "assistant",
-  "content": "[plan]\nNeed retrieval.",
+  "content": "<plan>\nNeed retrieval.\n</plan>",
   "message_type": "plan",
   "workflow_turn_id": "user-1",
   "tool_name": null,
@@ -73,6 +73,8 @@
   }
 }
 ```
+
+新 workflow 内部消息使用 paired XML-style tags。
 
 可选字段：
 

@@ -57,6 +57,7 @@ Web UI 现在区分两条流：
 - 本项目只负责数据准备、发 API 请求、保存向量库、执行检索
 - 不在 `eco_rag/` 里托管 embedding 推理服务
 - 如果你部署了本地 embedding 服务，只需要把它当成外部 provider 写进 `models.json`
+- PDF 入库会优先调用可选的 `marker_single` 转 Markdown；未安装 Marker 时回退到 `PyPDF2`
 
 ## 持久化与上下文
 
@@ -111,6 +112,23 @@ Eco_RAG/
 conda activate llm
 python -m pip install -e .
 ```
+
+可选：如果需要更好的 PDF 结构化解析和 OCR，再安装 Marker：
+
+```bash
+conda activate llm
+python -m pip install marker-pdf
+```
+
+如果要让 Marker 使用 NVIDIA GPU，`llm` 环境里的 PyTorch 必须是 CUDA 版：
+
+```bash
+conda activate llm
+python -m pip install --upgrade --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+```
+
+当前入库默认给 Marker 加了 `--disable_ocr`，优先处理文本型 PDF；扫描版 PDF 需要 OCR 时可以去掉这个参数。
 
 启动后端：
 

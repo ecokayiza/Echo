@@ -32,6 +32,7 @@ export function buildPendingWorkflow(meta: MetaResponse | null, query: string): 
     query,
     answer: "",
     status: "running",
+    retrieve_round: 0,
     active_node: "plan",
     node_statuses: nodeNames.map((node) => ({
       node,

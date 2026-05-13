@@ -14,6 +14,8 @@ import { IconActionMenu } from "@/components/common/IconActionMenu";
 import { formatTokenTotal, formatTokenUsage } from "@/lib/format";
 import type { MessageRecord, WorkflowSnapshot } from "@/types/chat";
 
+import { MarkdownMessage } from "./MarkdownMessage";
+
 interface ThoughtEntry {
   label: string;
   content: string;
@@ -213,58 +215,54 @@ export function MessageCard({
             <div className="message-thoughts__content" ref={thoughtsContentRef}>
               {thoughtEntries.map((entry, index) => (
                 <div key={`${entry.label}-${index}`} className="message-thoughts__log" data-level={entry.level}>
-                  <span className="message-thoughts__log-node">[{entry.label}]</span>
-                  <span className="message-thoughts__log-text">{entry.content}</span>
+                  <span className="message-thoughts__log-node">&lt;{entry.label}&gt;</span>
+                  <MarkdownMessage className="message-thoughts__log-text" content={entry.content} />
                 </div>
               ))}
             </div>
           </details>
         ) : null}
 
-        <div
-          className={`message-card__body ${editing ? "message-card__body--editing" : ""}`}
-          contentEditable={editing}
-          suppressContentEditableWarning
-          onInput={(event) => {
-            setDraft(event.currentTarget.innerText || "");
-          }}
-          onKeyDown={(event) => {
-            if (!editing) return;
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault();
-              submitEdit();
-              return;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.currentTarget.innerText = displayContent as string;
-              setEditing(false);
-              setDraft(displayContent as string);
-            }
-          }}
-          ref={(el) => {
-            if (editing && el && document.activeElement !== el) {
-              el.focus();
-              try {
-                const range = document.createRange();
-                const selection = window.getSelection();
-                range.selectNodeContents(el);
-                range.collapse(false);
-                selection?.removeAllRanges();
-                selection?.addRange(range);
-              } catch {}
-            }
-          }}
-          style={{
-            outline: "none",
-            cursor: editing ? "text" : "inherit",
-            whiteSpace: "pre-wrap",
-            padding: editing ? "0" : undefined,
-            margin: editing ? "0" : undefined,
-          }}
-        >
-          {displayContent}
-        </div>
+        {editing ? (
+          <div
+            className="message-card__body message-card__body--editing"
+            contentEditable
+            suppressContentEditableWarning
+            onInput={(event) => {
+              setDraft(event.currentTarget.innerText || "");
+            }}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                event.preventDefault();
+                submitEdit();
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                event.currentTarget.innerText = displayContent as string;
+                setEditing(false);
+                setDraft(displayContent as string);
+              }
+            }}
+            ref={(el) => {
+              if (el && document.activeElement !== el) {
+                el.focus();
+                try {
+                  const range = document.createRange();
+                  const selection = window.getSelection();
+                  range.selectNodeContents(el);
+                  range.collapse(false);
+                  selection?.removeAllRanges();
+                  selection?.addRange(range);
+                } catch {}
+              }
+            }}
+          >
+            {displayContent}
+          </div>
+        ) : (
+          <MarkdownMessage className="message-card__body" content={displayContent} />
+        )}
 
         {totalTokenLabel || !message.pending ? (
           <div className="message-card__footer">
@@ -302,9 +300,8 @@ function buildWorkflowMessageThoughtEntries(workflowMessages: MessageRecord[]): 
   return workflowMessages.flatMap((entry) => {
     if (entry.message_type === "tool") {
       const toolBlock = extractWorkflowBlock(entry.content, "tool");
-      return toolBlock
-        ? [{ label: entry.tool_name || "tool", content: toolBlock }]
-        : [];
+      const content = summarizeToolThought(entry.tool_name, toolBlock);
+      return content ? [{ label: entry.tool_name || "tool", content }] : [];
     }
     if (entry.message_type === "plan" || entry.message_type === "think") {
       const reasoningBlock = extractWorkflowBlock(entry.content, entry.message_type);
@@ -314,6 +311,20 @@ function buildWorkflowMessageThoughtEntries(workflowMessages: MessageRecord[]): 
     }
     return [];
   });
+}
+
+function summarizeToolThought(toolName: string | null | undefined, content: string) {
+  if (!content) {
+    return "";
+  }
+  if (toolName === "load_skill") {
+    const loadedLine = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.toLowerCase().startsWith("loaded skill:"));
+    return loadedLine || "Loaded skill guidance.";
+  }
+  return content;
 }
 
 function buildLiveThoughtEntries(workflow: WorkflowSnapshot | null | undefined): ThoughtEntry[] {
@@ -335,10 +346,16 @@ function parseWorkflowSections(content: string): Record<string, string> {
   let current: string | null = null;
 
   for (const line of content.split(/\r?\n/)) {
-    const match = line.trim().match(/^\[([a-z_]+)\]$/i);
-    if (match) {
-      current = match[1].toLowerCase();
+    const openMatch = line.trim().match(/^<([a-z_]+)>$/i);
+    const closeMatch = line.trim().match(/^<\/([a-z_]+)>$/i);
+
+    if (!current && openMatch && isWorkflowSectionName(openMatch[1])) {
+      current = openMatch[1].toLowerCase();
       sections[current] = [];
+      continue;
+    }
+    if (current && closeMatch?.[1].toLowerCase() === current) {
+      current = null;
       continue;
     }
     if (current) {
@@ -347,4 +364,8 @@ function parseWorkflowSections(content: string): Record<string, string> {
   }
 
   return Object.fromEntries(Object.entries(sections).map(([key, value]) => [key, value.join("\n").trim()]));
+}
+
+function isWorkflowSectionName(name: string) {
+  return ["plan", "think", "retrieve", "answer", "tool"].includes(name.toLowerCase());
 }

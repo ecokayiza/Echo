@@ -1,11 +1,16 @@
 import type {
+  AppSettingsDocument,
   DatabaseDocumentRecord,
   DatabaseState,
   HealthResponse,
   MetaResponse,
+  ChatModelConfig,
+  EmbeddingModelConfig,
+  ModelApiTestResponse,
   ModelSettingsDocument,
   SessionState,
   SessionSummary,
+  SkillSettingsDocument,
   UploadJobRecord,
 } from "@/types/chat";
 
@@ -32,6 +37,40 @@ export const api = {
   },
   updateModelSettings(settings: ModelSettingsDocument) {
     return requestJson<ModelSettingsDocument>("/api/model-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+  },
+  testChatModel(model: ChatModelConfig) {
+    return requestJson<ModelApiTestResponse>("/api/model-settings/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "chat", chat_model: model }),
+    });
+  },
+  testEmbeddingModel(model: EmbeddingModelConfig) {
+    return requestJson<ModelApiTestResponse>("/api/model-settings/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "embedding", embedding_model: model }),
+    });
+  },
+  getAppSettings() {
+    return requestJson<AppSettingsDocument>("/api/app-settings");
+  },
+  updateAppSettings(settings: AppSettingsDocument) {
+    return requestJson<AppSettingsDocument>("/api/app-settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+  },
+  getSkills() {
+    return requestJson<SkillSettingsDocument>("/api/skills");
+  },
+  updateSkills(settings: SkillSettingsDocument) {
+    return requestJson<SkillSettingsDocument>("/api/skills", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
@@ -89,6 +128,11 @@ export const api = {
   getDatabaseUploadJob(databaseId: string, jobId: string) {
     return requestJson<UploadJobRecord>(
       `/api/databases/${encodeURIComponent(databaseId)}/documents/jobs/${encodeURIComponent(jobId)}`
+    );
+  },
+  getCurrentDatabaseUploadJob(databaseId: string) {
+    return requestJson<UploadJobRecord | null>(
+      `/api/databases/${encodeURIComponent(databaseId)}/documents/jobs/current`
     );
   },
   listDatabaseDocuments(databaseId: string) {

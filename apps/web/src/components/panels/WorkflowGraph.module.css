@@ -4,10 +4,13 @@
   align-items: center;
   padding: 1rem 0;
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .graphWrapper {
   position: relative;
+  flex: 0 0 auto;
   width: 320px;
   height: 280px;
 }
@@ -114,5 +117,12 @@
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 380px) {
+  .container {
+    justify-content: flex-start;
+    padding-inline: 0.25rem;
   }
 }

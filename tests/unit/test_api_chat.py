@@ -1,15 +1,19 @@
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from eco_rag.chat.chat_model import OpenAIChatModel
 from apps.api.app.main import create_app
 from eco_rag.chat.service import SessionState
 from eco_rag.config import Config
 from eco_rag.indexing.vector_database import VectorDatabase
+from eco_rag.skills import manager as skills_manager
+from eco_rag.workflow_sections import parse_workflow_sections
 
 READ_ONLY_TYPES = {"plan", "think", "tool"}
 
@@ -131,7 +135,7 @@ class FakeChatService:
                 {
                     "id": "plan-1",
                     "role": "assistant",
-                    "content": "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
+                    "content": "<plan>\nNeed retrieval.\n</plan>\n<retrieve>\nlegacy_search(\"hello\")\n</retrieve>",
                     "message_type": "plan",
                     "workflow_turn_id": workflow_turn_id,
                     "token_usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
@@ -139,7 +143,7 @@ class FakeChatService:
                 {
                     "id": "tool-1",
                     "role": "tool",
-                    "content": "[tool]\nlegacy_search(query='hello')\n\n1.\ncontext::hello",
+                    "content": "<tool>\nlegacy_search(query='hello')\n\n1.\ncontext::hello\n</tool>",
                     "message_type": "tool",
                     "workflow_turn_id": workflow_turn_id,
                     "tool_name": "legacy_search",
@@ -147,7 +151,7 @@ class FakeChatService:
                 {
                     "id": "think-1",
                     "role": "assistant",
-                    "content": "[think]\nThe evidence is enough.\n[answer]\nreply:hello",
+                    "content": "<think>\nThe evidence is enough.\n</think>\n<answer>\nreply:hello\n</answer>",
                     "message_type": "think",
                     "workflow_turn_id": workflow_turn_id,
                     "token_usage": {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4},
@@ -217,14 +221,14 @@ class FakeChatService:
                 {
                     "id": "plan-2",
                     "role": "assistant",
-                    "content": "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
+                    "content": "<plan>\nNeed retrieval.\n</plan>\n<retrieve>\nlegacy_search(\"hello\")\n</retrieve>",
                     "message_type": "plan",
                     "workflow_turn_id": workflow_turn_id,
                 },
                 {
                     "id": "tool-2",
                     "role": "tool",
-                    "content": "[tool]\nlegacy_search(query='hello')\n\n1.\ncontext::hello",
+                    "content": "<tool>\nlegacy_search(query='hello')\n\n1.\ncontext::hello\n</tool>",
                     "message_type": "tool",
                     "workflow_turn_id": workflow_turn_id,
                     "tool_name": "legacy_search",
@@ -232,7 +236,7 @@ class FakeChatService:
                 {
                     "id": "think-2",
                     "role": "assistant",
-                    "content": "[think]\nThe evidence is enough.\n[answer]\nreply:regenerated",
+                    "content": "<think>\nThe evidence is enough.\n</think>\n<answer>\nreply:regenerated\n</answer>",
                     "message_type": "think",
                     "workflow_turn_id": workflow_turn_id,
                     "token_usage": {"prompt_tokens": 9, "completion_tokens": 4, "total_tokens": 13},
@@ -269,10 +273,7 @@ class FakeChatService:
         for message in reversed(session["messages"]):
             if message["role"] == "assistant" and message["content"].strip():
                 content = message["content"].strip()
-                if "[answer]" in content:
-                    preview = content.split("[answer]")[-1].strip()[:80]
-                else:
-                    preview = content[:80]
+                preview = (parse_workflow_sections(content).get("answer") or content)[:80]
                 break
                 
         if not preview:
@@ -294,18 +295,30 @@ class FakeChatService:
         }
 
 
+def write_test_skill(name: str, description: str, content: str):
+    path = skills_manager.SKILLS_DIR / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n{content}\n", encoding="utf-8")
+
+
 class ApiChatTests(unittest.TestCase):
     def setUp(self):
         self._temp_dir = tempfile.TemporaryDirectory()
         self._previous_models_path = Config.MODELS_PATH
         self._previous_databases_path = Config.DATABASES_PATH
+        self._previous_settings_path = Config.SETTINGS_PATH
         self._previous_db_path = Config.DB_PATH
         self._previous_data_dir = Config.DATA_DIR
+        self._previous_skills_dir = skills_manager.SKILLS_DIR
         Config.MODELS_PATH = type(Config.MODELS_PATH)(self._temp_dir.name) / "models.json"
         Config.DATABASES_PATH = type(Config.DATABASES_PATH)(self._temp_dir.name) / "databases.json"
+        Config.SETTINGS_PATH = type(Config.SETTINGS_PATH)(self._temp_dir.name) / "settings.json"
         Config.DB_PATH = type(Config.DB_PATH)(self._temp_dir.name) / "db"
         Config.DATA_DIR = type(Config.DATA_DIR)(self._temp_dir.name) / "data"
         Config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        skills_manager.SKILLS_DIR = type(skills_manager.SKILLS_DIR)(self._temp_dir.name) / "skills"
+        write_test_skill("search", "Search skill.", "# Search\n\nUse search.")
+        write_test_skill("workspace-files", "Workspace skill.", "# Workspace Files\n\nUse files.")
         Config.MODELS_PATH.write_text(
             json.dumps(
                 {
@@ -319,7 +332,7 @@ class ApiChatTests(unittest.TestCase):
                             "base_url": "https://example.test",
                             "temperature": 0.8,
                             "top_p": 0.9,
-                            "enable_thinking": False,
+                            "custom_request_params": {"max_tokens": 512},
                         }
                     ],
                     "embedding_models": [
@@ -341,8 +354,10 @@ class ApiChatTests(unittest.TestCase):
     def tearDown(self):
         Config.MODELS_PATH = self._previous_models_path
         Config.DATABASES_PATH = self._previous_databases_path
+        Config.SETTINGS_PATH = self._previous_settings_path
         Config.DB_PATH = self._previous_db_path
         Config.DATA_DIR = self._previous_data_dir
+        skills_manager.SKILLS_DIR = self._previous_skills_dir
         try:
             self._temp_dir.cleanup()
         except PermissionError:
@@ -455,6 +470,30 @@ class ApiChatTests(unittest.TestCase):
         self.assertTrue((Config.DATA_DIR / "uploads" / database["collection_name"] / "notes.md").exists())
         delete_file.assert_called_once_with(saved_path)
 
+    def test_database_upload_job_current_route_survives_app_recreation(self):
+        created = self.client.post("/api/databases", json={"name": "Test DB"}).json()
+        database = created["databases"][0]
+
+        with patch("apps.api.app.main._process_database_upload_job"):
+            created_job = self.client.post(
+                f"/api/databases/{database['id']}/documents/jobs",
+                files=[("files", ("notes.md", b"# Notes\nHello world", "text/markdown"))],
+            )
+
+        self.assertEqual(created_job.status_code, 200)
+        job_payload = created_job.json()
+        self.assertEqual(job_payload["status"], "queued")
+        self.assertTrue((Config.DATA_DIR / "upload_jobs.json").exists())
+
+        current = self.client.get(f"/api/databases/{database['id']}/documents/jobs/current")
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.json()["job_id"], job_payload["job_id"])
+
+        recreated_client = TestClient(create_app(chat_service=FakeChatService()))
+        restored = recreated_client.get(f"/api/databases/{database['id']}/documents/jobs/current")
+        self.assertEqual(restored.status_code, 200)
+        self.assertIsNone(restored.json())
+
     def test_database_document_preview_route(self):
         created = self.client.post("/api/databases", json={"name": "Test DB"}).json()
         database = created["databases"][0]
@@ -509,6 +548,7 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(current.status_code, 200)
         self.assertEqual(current.json()["active_chat_model"], "Test Chat")
         self.assertEqual(current.json()["chat_models"][0]["model"], "test-model")
+        self.assertNotIn("enable_thinking", current.json()["chat_models"][0])
 
         updated = self.client.put(
             "/api/model-settings",
@@ -523,7 +563,7 @@ class ApiChatTests(unittest.TestCase):
                         "base_url": "https://updated.example",
                         "temperature": 1.1,
                         "top_p": 0.95,
-                        "enable_thinking": True,
+                        "custom_request_params": {"max_tokens": 2048, "metadata": {"source": "settings"}},
                     }
                 ],
                 "embedding_models": [
@@ -539,11 +579,175 @@ class ApiChatTests(unittest.TestCase):
         self.assertEqual(updated.status_code, 200)
         self.assertEqual(updated.json()["active_chat_model"], "Updated Chat")
         self.assertEqual(updated.json()["chat_models"][0]["model"], "updated-model")
+        self.assertNotIn("enable_thinking", updated.json()["chat_models"][0])
 
         persisted = json.loads(Config.MODELS_PATH.read_text(encoding="utf-8"))
         self.assertEqual(persisted["chat_models"][0]["model"], "updated-model")
         self.assertEqual(persisted["chat_models"][0]["api_key"], "updated-key")
+        self.assertNotIn("enable_thinking", persisted["chat_models"][0])
+        self.assertEqual(persisted["chat_models"][0]["custom_request_params"]["max_tokens"], 2048)
         self.assertEqual(persisted["embedding_models"][0]["model"], "updated-embedding-model")
+
+    def test_chat_model_request_payload_uses_custom_request_params_only(self):
+        model = OpenAIChatModel(
+            api_key="test-key",
+            base_url="https://example.test",
+            model="test-model",
+            custom_request_params={"max_tokens": 2048},
+        )
+
+        payload = model._build_request_payload([{"role": "user", "content": "hello"}])
+
+        self.assertEqual(payload["extra_body"], {"max_tokens": 2048})
+
+        plain_model = OpenAIChatModel(
+            api_key="test-key",
+            base_url="https://example.test",
+            model="test-model",
+        )
+        plain_payload = plain_model._build_request_payload([{"role": "user", "content": "hello"}])
+        self.assertNotIn("extra_body", plain_payload)
+
+    def test_model_settings_test_route_probes_chat_and_embedding(self):
+        class FakeModel:
+            async def generate_response(self, messages):
+                return SimpleNamespace(content="OK")
+
+        with patch("apps.api.app.main.build_chat_model", return_value=FakeModel()) as build_chat_model:
+            chat_response = self.client.post(
+                "/api/model-settings/test",
+                json={
+                    "kind": "chat",
+                    "chat_model": {
+                        "name": "Draft Chat",
+                        "model": "draft-model",
+                        "api_key": "draft-key",
+                        "base_url": "https://draft.example",
+                        "temperature": 0.7,
+                    },
+                },
+            )
+
+        self.assertEqual(chat_response.status_code, 200)
+        self.assertTrue(chat_response.json()["ok"])
+        self.assertIn("Chat API test succeeded", chat_response.json()["message"])
+        self.assertEqual(build_chat_model.call_args.args[0].name, "Draft Chat")
+
+        with patch("apps.api.app.main.OpenAICompatibleEmbedder.embed_documents", return_value=[[0.1, 0.2, 0.3]]):
+            embedding_response = self.client.post(
+                "/api/model-settings/test",
+                json={
+                    "kind": "embedding",
+                    "embedding_model": {
+                        "name": "Draft Embedding",
+                        "model": "draft-embedding",
+                        "api_key": "embedding-key",
+                        "base_url": "https://embedding.example",
+                    },
+                },
+            )
+
+        self.assertEqual(embedding_response.status_code, 200)
+        self.assertTrue(embedding_response.json()["ok"])
+        self.assertIn("Vector dimensions: 3", embedding_response.json()["message"])
+
+    def test_app_settings_endpoint_manages_runtime_settings_json(self):
+        current = self.client.get("/api/app-settings")
+        self.assertEqual(current.status_code, 200)
+        self.assertEqual(current.json()["chunk_size"], Config.CHUNK_SIZE)
+        self.assertEqual(current.json()["web_search_backend"], "auto")
+        self.assertNotIn("max_context_messages", current.json())
+        self.assertNotIn("prompt_truncate_chars", current.json())
+
+        updated = self.client.put(
+            "/api/app-settings",
+            json={
+                "chunk_size": 640,
+                "chunk_overlap": 96,
+                "max_retrieve_rounds": 4,
+                "use_marker_pdf_loader": False,
+                "web_search_backend": "baidu",
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()["chunk_size"], 640)
+        self.assertFalse(updated.json()["use_marker_pdf_loader"])
+        self.assertEqual(updated.json()["web_search_backend"], "baidu")
+
+        persisted = json.loads(Config.SETTINGS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["chunk_size"], 640)
+        self.assertEqual(persisted["chunk_overlap"], 96)
+        self.assertEqual(persisted["max_retrieve_rounds"], 4)
+        self.assertFalse(persisted["use_marker_pdf_loader"])
+        self.assertEqual(persisted["web_search_backend"], "baidu")
+        self.assertNotIn("max_context_messages", persisted)
+        self.assertNotIn("prompt_truncate_chars", persisted)
+
+    def test_skill_settings_endpoints_manage_skill_files_and_runtime_flags(self):
+        current = self.client.get("/api/skills")
+        self.assertEqual(current.status_code, 200)
+        skills = current.json()["skills"]
+        self.assertEqual([skill["name"] for skill in skills], ["search", "workspace-files"])
+        self.assertTrue(next(skill for skill in skills if skill["name"] == "search")["protected"])
+
+        updated = self.client.put(
+            "/api/skills",
+            json={
+                "skills": [
+                    {
+                        "name": "search",
+                        "description": "Updated search skill.",
+                        "content": "# Search\n\nUpdated search guidance.",
+                        "enabled": True,
+                        "default": True,
+                        "protected": True,
+                    },
+                    {
+                        "name": "workspace-files",
+                        "description": "Workspace skill.",
+                        "content": "# Workspace Files\n\nUse files.",
+                        "enabled": False,
+                        "default": False,
+                        "protected": True,
+                    },
+                    {
+                        "name": "custom-notes",
+                        "description": "Custom notes skill.",
+                        "content": "# Custom Notes\n\nUse notes.",
+                        "enabled": True,
+                        "default": False,
+                        "protected": False,
+                    },
+                ]
+            },
+        )
+        self.assertEqual(updated.status_code, 200)
+        payload = updated.json()
+        self.assertEqual([skill["name"] for skill in payload["skills"]], ["search", "workspace-files", "custom-notes"])
+        self.assertFalse(next(skill for skill in payload["skills"] if skill["name"] == "workspace-files")["enabled"])
+        self.assertTrue((skills_manager.SKILLS_DIR / "custom-notes" / "SKILL.md").exists())
+
+        persisted_settings = json.loads(Config.SETTINGS_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(persisted_settings["enabled_skills"], ["search", "custom-notes"])
+        self.assertEqual(persisted_settings["default_skills"], ["search"])
+        self.assertIn("Updated search guidance.", (skills_manager.SKILLS_DIR / "search" / "SKILL.md").read_text(encoding="utf-8"))
+
+        delete_protected = self.client.put(
+            "/api/skills",
+            json={
+                "skills": [
+                    {
+                        "name": "workspace-files",
+                        "description": "Workspace skill.",
+                        "content": "# Workspace Files\n\nUse files.",
+                        "enabled": True,
+                        "default": True,
+                        "protected": True,
+                    }
+                ]
+            },
+        )
+        self.assertEqual(delete_protected.status_code, 400)
 
 
 if __name__ == "__main__":

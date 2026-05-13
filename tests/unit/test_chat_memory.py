@@ -104,26 +104,27 @@ class ChatMemoryTests(unittest.TestCase):
             self.assertEqual(reloaded_sessions.summary()["token_usage"]["prompt_cache_hit_tokens"], 7)
             self.assertNotIn("prompt_cache_miss_tokens", payload["usage"])
 
-    def test_next_turn_context_prefers_last_think_over_answer(self):
+    def test_next_turn_context_merges_workflow_turn_without_tool_results(self):
         sessions = Sessions(session_id="workflow-think", storage={})
         messages = Messages(sessions=sessions)
         messages.append("user", "hello", message_type="user")
         messages.append(
             "assistant",
-            "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
+            "<plan>\nNeed retrieval.\n</plan>\n<retrieve>\nlegacy_search(\"hello\")\n</retrieve>",
             message_type="plan",
             workflow_turn_id="turn-1",
+            tool_calls=[{"name": "legacy_search", "args": {"query": "hello"}}],
         )
         messages.append(
             "tool",
-            "[tool]\nlegacy_search(query='hello')",
+            "<tool>\nlegacy_search(query='hello')\n\ncontext::hello\n</tool>",
             message_type="tool",
             workflow_turn_id="turn-1",
             tool_name="legacy_search",
         )
         messages.append(
             "assistant",
-            "[think]\nThe evidence is enough.\n[answer]\nworld",
+            "<think>\nThe evidence is enough.\n</think>\n<answer>\nworld\n</answer>",
             message_type="think",
             workflow_turn_id="turn-1",
         )
@@ -145,17 +146,28 @@ class ChatMemoryTests(unittest.TestCase):
             context,
             [
                 {"role": "user", "content": "hello"},
-                {"role": "assistant", "content": "[think]\nThe evidence is enough."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "<plan>\nNeed retrieval.\n</plan>\n\n"
+                        "<retrieve>\nlegacy_search(\"hello\")\n</retrieve>\n\n"
+                        "<think>\nThe evidence is enough.\n</think>\n\n"
+                        "<answer>\nworld\n</answer>"
+                    ),
+                },
             ],
         )
+        self.assertNotIn("context::hello", context[-1]["content"])
+        self.assertNotIn("tool_calls", context[-1])
+        self.assertEqual(context[-1]["content"].count("<answer>"), 1)
 
-    def test_next_turn_context_uses_plan_for_direct_answer_turn(self):
+    def test_next_turn_context_merges_direct_answer_turn(self):
         sessions = Sessions(session_id="workflow-plan", storage={})
         messages = Messages(sessions=sessions)
         messages.append("user", "hi", message_type="user")
         messages.append(
             "assistant",
-            "[plan]\nThis is a greeting.\n[answer]\nHello!",
+            "<plan>\nThis is a greeting.\n</plan>\n<answer>\nHello!\n</answer>",
             message_type="plan",
             workflow_turn_id="turn-1",
         )
@@ -172,9 +184,24 @@ class ChatMemoryTests(unittest.TestCase):
             context,
             [
                 {"role": "user", "content": "hi"},
-                {"role": "assistant", "content": "[plan]\nThis is a greeting."},
+                {
+                    "role": "assistant",
+                    "content": "<plan>\nThis is a greeting.\n</plan>\n\n<answer>\nHello!\n</answer>",
+                },
             ],
         )
+
+    def test_session_preview_extracts_workflow_answer(self):
+        xml_sessions = Sessions(session_id="preview-xml", storage={})
+        xml_messages = Messages(sessions=xml_sessions)
+        xml_messages.append(
+            "assistant",
+            "<plan>\nBrief.\n</plan>\n<answer>\nXML answer.\n</answer>",
+            message_type="plan",
+            workflow_turn_id="turn-1",
+        )
+
+        self.assertEqual(xml_sessions.summary()["preview"], "XML answer.")
 
 
 class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
@@ -183,7 +210,7 @@ class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
         messages = Messages(sessions=sessions)
         plan_message = messages.append(
             "assistant",
-            "[plan]\nNeed retrieval.",
+            "<plan>\nNeed retrieval.\n</plan>",
             message_type="plan",
             workflow_turn_id="turn-1",
         )
@@ -202,7 +229,7 @@ class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
         messages = Messages(sessions=sessions)
         reply = messages.append(
             "assistant",
-            "[plan]\nThis is a greeting.\n\n[answer]\nHello!",
+            "<plan>\nThis is a greeting.\n</plan>\n\n<answer>\nHello!\n</answer>",
             message_type="plan",
             workflow_turn_id="turn-1",
         )
@@ -211,8 +238,8 @@ class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
 
         updated = messages.get()[-1]
         self.assertEqual(updated.message_type, "plan")
-        self.assertIn("[plan]\nThis is a greeting.", updated.content)
-        self.assertIn("[answer]\nHello again!", updated.content)
+        self.assertIn("<plan>\nThis is a greeting.\n</plan>", updated.content)
+        self.assertIn("<answer>\nHello again!\n</answer>", updated.content)
 
     async def test_workflow_answer_proxy_delete_removes_entire_turn(self):
         sessions = Sessions(session_id="answer-proxy-delete", storage={})
@@ -220,20 +247,20 @@ class ChatMutationTests(unittest.IsolatedAsyncioTestCase):
         messages.append("user", "hello", message_type="user")
         messages.append(
             "assistant",
-            "[plan]\nNeed retrieval.\n[retrieve]\nlegacy_search(\"hello\")",
+            "<plan>\nNeed retrieval.\n</plan>\n<retrieve>\nlegacy_search(\"hello\")\n</retrieve>",
             message_type="plan",
             workflow_turn_id="turn-1",
         )
         messages.append(
             "tool",
-            "[tool]\nlegacy_search(query='hello')",
+            "<tool>\nlegacy_search(query='hello')\n</tool>",
             message_type="tool",
             workflow_turn_id="turn-1",
             tool_name="legacy_search",
         )
         reply = messages.append(
             "assistant",
-            "[think]\nThe evidence is enough.\n\n[answer]\nworld",
+            "<think>\nThe evidence is enough.\n</think>\n\n<answer>\nworld\n</answer>",
             message_type="think",
             workflow_turn_id="turn-1",
         )
@@ -264,9 +291,16 @@ class WorkflowPromptTests(unittest.TestCase):
     def test_default_system_prompt_embeds_skill_documents(self):
         prompt = default_system_prompt()
 
-        self.assertIn("# database_search", prompt)
-        self.assertIn("# web_search", prompt)
+        self.assertIn("# Search", prompt)
+        self.assertIn("database_search", prompt)
+        self.assertIn("web_search", prompt)
+        self.assertIn("web_fetch", prompt)
+        self.assertIn("Never call `load_skill` for a default skill", prompt)
+        self.assertIn("provider-native tool markup", prompt)
         self.assertIn("# Available Skills", prompt)
+        self.assertIn("`search`", prompt)
+        self.assertNotIn("# database_search", prompt)
+        self.assertNotIn("# web_search", prompt)
 
 
 if __name__ == "__main__":

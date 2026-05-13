@@ -9,9 +9,11 @@ class Config:
     SETTINGS_PATH = ROOT_DIR / "settings.json"
     DATABASES_PATH = ROOT_DIR / "databases.json"
     DATA_DIR = ROOT_DIR / "data"
+    WORKSPACE_DIR = DATA_DIR / "workspace"
     DB_PATH = ROOT_DIR / "db"
     MEMORY_DIR = ROOT_DIR / "memory"
     CHAT_MEMORY_DIR = MEMORY_DIR / "chat_sessions"
+    WORKFLOW_DRAFT_DIR = MEMORY_DIR / "workflow_live"
     MEMORY_ARTIFACTS_DIR = MEMORY_DIR / "artifacts"
     TEST_FILE_PATH = DATA_DIR / "C1" / "markdown" / "easy-rl-chapter1.md"
 

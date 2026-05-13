@@ -6,6 +6,7 @@ from ..chat.registry import ChatModelSettings, build_chat_model
 from ..skills import list_available_skills
 from ..settings import load_app_settings
 from ..tools import build_retrieve_tools
+from .drafts import WorkflowDraftStore
 from .graph import build_workflow
 from .nodes import WorkflowDependencies
 from .prompts import default_system_prompt
@@ -21,9 +22,11 @@ class WorkflowService:
         model_factory: Callable[[ChatModelSettings | None], Any] = build_chat_model,
         *,
         tool_runner: Callable[[str], Any] | None = None,
+        draft_storage: dict[str, dict[str, Any]] | None = None,
     ):
         self.model_factory = model_factory
         self.tool_runner = tool_runner
+        self.draft_store = WorkflowDraftStore(storage=draft_storage) if draft_storage is not None else None
 
     async def stream(
         self,
@@ -44,13 +47,31 @@ class WorkflowService:
         *,
         context: list[dict[str, Any]] | None = None,
         workflow_turn_id: str | None = None,
+        session_id: str | None = None,
+        user_message_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream workflow events for one chat turn from persisted session history."""
         query = self._query(question)
+        state = new_state(
+            query,
+            self._default_context(query, context),
+            workflow_turn_id=workflow_turn_id or user_message_id,
+        )
+        records: list[dict[str, Any]] = []
+        if self.draft_store is not None and session_id and user_message_id:
+            draft = self.draft_store.load(session_id)
+            if draft and draft["user_message_id"] == user_message_id:
+                state = dict(draft["state"])
+                records = [dict(item) for item in draft["records"]]
+            elif draft:
+                self.draft_store.clear(session_id)
+
         async for item in self._stream_state(
-            new_state(query, self._default_context(query, context), workflow_turn_id=workflow_turn_id),
+            state,
             tracker=None,
-            records=[],
+            records=records,
+            draft_session_id=session_id,
+            draft_user_message_id=user_message_id,
         ):
             yield item
 
@@ -95,6 +116,8 @@ class WorkflowService:
         *,
         tracker: WorkflowTracker | None,
         records: list[dict[str, Any]],
+        draft_session_id: str | None = None,
+        draft_user_message_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Run the workflow and emit state updates, chunks, and the final result."""
         deps = self._deps()
@@ -143,10 +166,13 @@ class WorkflowService:
                     current_state = {**current_state, **result}
                 runtime_tracker.complete(step, self._detail_for_step(step, current_state))
                 self._log_route(runtime_tracker, step, current_state)
+                self._persist_draft(draft_session_id, draft_user_message_id, current_state, runtime_tracker, buffered_records)
                 yield {"event": "state", "data": runtime_tracker.snapshot(current_state)}
 
             runtime_tracker.finish()
             snapshot = runtime_tracker.snapshot(current_state)
+            if self.draft_store is not None and draft_session_id:
+                self.draft_store.clear(draft_session_id)
             yield {"event": "state", "data": snapshot}
             yield {
                 "event": "done",
@@ -158,8 +184,28 @@ class WorkflowService:
             }
         except Exception as exc:
             runtime_tracker.fail(str(exc), node=runtime_tracker.active_node)
+            self._persist_draft(draft_session_id, draft_user_message_id, current_state, runtime_tracker, buffered_records)
             yield {"event": "state", "data": runtime_tracker.snapshot(current_state)}
             raise
+
+    def _persist_draft(
+        self,
+        session_id: str | None,
+        user_message_id: str | None,
+        state: WorkflowState,
+        tracker: WorkflowTracker,
+        records: list[dict[str, Any]],
+    ):
+        """Persist resumable workflow state when a draft store is configured."""
+        if self.draft_store is None or not session_id or not user_message_id:
+            return
+        self.draft_store.persist(
+            session_id,
+            user_message_id=user_message_id,
+            state=dict(state),
+            snapshot=tracker.snapshot(state),
+            records=[dict(item) for item in records],
+        )
 
     @staticmethod
     def _detail_for_step(step: WorkflowStep, state: WorkflowState) -> str:
@@ -179,11 +225,7 @@ class WorkflowService:
     @staticmethod
     def _log_route(tracker: WorkflowTracker, step: WorkflowStep, state: WorkflowState):
         """Keep live workflow logs minimal and high-signal."""
-        if step == WorkflowStep.RETRIEVE:
-            pending = state.get("pending_retrieve") or {}
-            tool_name = str(pending.get("name") or "").strip()
-            if tool_name:
-                tracker.log(f"Using '{tool_name}'.", node=step.value)
+        return
 
     @staticmethod
     def _start_step(tracker: WorkflowTracker, step: WorkflowStep):

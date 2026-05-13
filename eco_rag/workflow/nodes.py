@@ -6,15 +6,18 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from langchain_core.tools import BaseTool
 from langgraph.config import get_stream_writer
 
 from ..chat.chat_model import BaseChatModel, Response
+from ..skills import list_default_skills
+from ..workflow_sections import parse_workflow_sections, render_workflow_section
 from .state import WorkflowState, WorkflowStep
 
-SECTION_PATTERN = re.compile(r"(?ms)^\[([a-z_]+)\]\s*(.*?)(?=^\[[a-z_]+\]\s*|\Z)")
 ANSWER_CHUNK_PATTERN = re.compile(r"\S+\s*|\s+")
+MALFORMED_CLOSING_TAG_PATTERN = re.compile(r"\s*</[^>\r\n]+>\s*$")
 
 
 @dataclass(frozen=True)
@@ -257,15 +260,29 @@ def _decision_from_response(
         if response.tool_calls:
             raise ValueError(f"{node.title()} node must not use provider-native tool calls.")
 
-        sections = _sections(response.content)
-        _required_text(sections.get(node), node)
-        next_step = _decision_action(sections, node=node)
+        content = (response.content or "").strip()
+        sections = _sections(content, allow_unclosed=True)
 
         if requested_skill:
             return {
                 "next_step": WorkflowStep.RETRIEVE.value,
                 "pending_retrieve": {"name": "load_skill", "args": {"skill_name": requested_skill}},
             }
+
+        if not sections:
+            return {
+                "next_step": WorkflowStep.ANSWER.value,
+                "answer": _required_block(content, "answer"),
+            }
+
+        fallback_answer = _fallback_answer_from_node_only_response(sections, node=node)
+        if fallback_answer is not None:
+            return {
+                "next_step": WorkflowStep.ANSWER.value,
+                "answer": fallback_answer,
+            }
+
+        next_step = _decision_action(sections, node=node)
 
         if next_step == WorkflowStep.ANSWER.value:
             return {
@@ -313,9 +330,10 @@ async def _run_tool(
 
 
 def _parse_retrieve_call(text: str, allowed_tool_names: set[str]) -> dict[str, Any]:
-    """Parse one safe retrieval command from the bracketed retrieve block."""
+    """Parse one safe retrieval command from the retrieve block."""
+    cleaned_text = _clean_retrieve_command(text)
     try:
-        expression = ast.parse(_strip_code_fences(text).strip(), mode="eval")
+        expression = ast.parse(cleaned_text, mode="eval")
     except SyntaxError as exc:
         raise ValueError(f"Invalid retrieve command: {text}") from exc
 
@@ -334,6 +352,8 @@ def _parse_retrieve_call(text: str, allowed_tool_names: set[str]) -> dict[str, A
         skill_name = kwargs.get("skill_name", args[0] if args else None)
         if not isinstance(skill_name, str) or not skill_name.strip():
             raise ValueError("load_skill requires one non-empty skill name.")
+        if _is_default_skill(skill_name):
+            raise ValueError(f"Default skill '{skill_name.strip()}' is already loaded and must not be loaded again.")
         return {"name": tool_name, "args": {"skill_name": skill_name.strip()}}
 
     if tool_name in {"database_search", "legacy_search"}:
@@ -365,7 +385,89 @@ def _parse_retrieve_call(text: str, allowed_tool_names: set[str]) -> dict[str, A
             payload["max_results"] = max_results
         return {"name": tool_name, "args": payload}
 
+    if tool_name == "web_fetch":
+        url = kwargs.get("url", args[0] if args else None)
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("web_fetch requires one non-empty URL.")
+        parsed_url = urlparse(url.strip())
+        if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+            raise ValueError("web_fetch requires an http or https URL.")
+        payload = {"url": url.strip()}
+        max_chars = kwargs.get("max_chars")
+        if isinstance(max_chars, int) and not isinstance(max_chars, bool):
+            payload["max_chars"] = max_chars
+        return {"name": tool_name, "args": payload}
+
+    if tool_name == "workspace_list_files":
+        path = kwargs.get("path", args[0] if args else ".")
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError("workspace_list_files requires a non-empty path string.")
+        payload: dict[str, Any] = {"path": path.strip()}
+        recursive = kwargs.get("recursive")
+        if isinstance(recursive, bool):
+            payload["recursive"] = recursive
+        max_results = kwargs.get("max_results")
+        if isinstance(max_results, int) and not isinstance(max_results, bool):
+            payload["max_results"] = max_results
+        return {"name": tool_name, "args": payload}
+
+    if tool_name == "workspace_read_file":
+        file_path = kwargs.get("file_path", kwargs.get("path", args[0] if args else None))
+        if not isinstance(file_path, str) or not file_path.strip():
+            raise ValueError("workspace_read_file requires one non-empty file_path string.")
+        payload = {"file_path": file_path.strip()}
+        max_chars = kwargs.get("max_chars")
+        if isinstance(max_chars, int) and not isinstance(max_chars, bool):
+            payload["max_chars"] = max_chars
+        return {"name": tool_name, "args": payload}
+
+    if tool_name == "workspace_write_file":
+        file_path = kwargs.get("file_path", kwargs.get("path", args[0] if args else None))
+        content = kwargs.get("content", args[1] if len(args) > 1 else None)
+        if not isinstance(file_path, str) or not file_path.strip():
+            raise ValueError("workspace_write_file requires one non-empty file_path string.")
+        if not isinstance(content, str):
+            raise ValueError("workspace_write_file requires content as a string.")
+        payload = {"file_path": file_path.strip(), "content": content}
+        overwrite = kwargs.get("overwrite")
+        if isinstance(overwrite, bool):
+            payload["overwrite"] = overwrite
+        return {"name": tool_name, "args": payload}
+
+    if tool_name == "workspace_edit_file":
+        file_path = kwargs.get("file_path", kwargs.get("path", args[0] if args else None))
+        old_text = kwargs.get("old_text", args[1] if len(args) > 1 else None)
+        new_text = kwargs.get("new_text", args[2] if len(args) > 2 else None)
+        if not isinstance(file_path, str) or not file_path.strip():
+            raise ValueError("workspace_edit_file requires one non-empty file_path string.")
+        if not isinstance(old_text, str):
+            raise ValueError("workspace_edit_file requires old_text as a string.")
+        if not isinstance(new_text, str):
+            raise ValueError("workspace_edit_file requires new_text as a string.")
+        payload = {"file_path": file_path.strip(), "old_text": old_text, "new_text": new_text}
+        expected_replacements = kwargs.get("expected_replacements")
+        if isinstance(expected_replacements, int) and not isinstance(expected_replacements, bool):
+            payload["expected_replacements"] = expected_replacements
+        return {"name": tool_name, "args": payload}
+
     raise ValueError(f"Retrieve tool '{tool_name}' is not supported by the parser.")
+
+
+def _clean_retrieve_command(text: str) -> str:
+    """Remove malformed provider closing tags from one retrieve command."""
+    lines = []
+    for line in str(text or "").strip().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("</") and stripped.endswith(">"):
+            continue
+        lines.append(line)
+    return MALFORMED_CLOSING_TAG_PATTERN.sub("", "\n".join(lines).strip()).strip()
+
+
+def _is_default_skill(skill_name: str) -> bool:
+    requested = skill_name.strip().lower().replace("_", "-")
+    defaults = {skill.lower().replace("_", "-") for skill in list_default_skills()}
+    return requested in defaults
 
 
 def _literal_value(node: ast.AST) -> Any:
@@ -380,19 +482,19 @@ def _literal_value(node: ast.AST) -> Any:
 
 def _format_tool_message(tool_name: str, tool_args: dict[str, Any], result: dict[str, Any]) -> str:
     """Render one readable tool message for persisted history."""
-    heading = f"[tool]\n{tool_name}({', '.join(f'{key}={value!r}' for key, value in tool_args.items())})"
+    heading = f"{tool_name}({', '.join(f'{key}={value!r}' for key, value in tool_args.items())})"
     error = _optional_text(result.get("error"))
     if error:
-        return f"{heading}\n\nError: {error}"
+        return render_workflow_section("tool", f"{heading}\n\nError: {error}")
 
     if result.get("type") == "skill":
         content = str(result.get("content") or "").strip()
         skill_name = _optional_text(result.get("skill_name")) or tool_name
-        return f"{heading}\n\nLoaded skill: {skill_name}\n\n{content}"
+        return render_workflow_section("tool", f"{heading}\n\nLoaded skill: {skill_name}\n\n{content}")
 
     items = result.get("items")
     if not isinstance(items, list) or not items:
-        return f"{heading}\n\nNo results."
+        return render_workflow_section("tool", f"{heading}\n\nNo results.")
 
     parts = []
     for index, item in enumerate(items, start=1):
@@ -408,7 +510,7 @@ def _format_tool_message(tool_name: str, tool_args: dict[str, Any], result: dict
         if content:
             line = f"{line}\n{content}"
         parts.append(line.strip())
-    return f"{heading}\n\n" + "\n\n".join(parts)
+    return render_workflow_section("tool", f"{heading}\n\n" + "\n\n".join(parts))
 
 
 def _emit_record(record: dict[str, Any]):
@@ -456,7 +558,7 @@ async def _stream_decision_response(
             )
             streamed_answer = _emit_streaming_answer(
                 writer,
-                sections=_sections(stripped),
+                sections=_sections(stripped, allow_unclosed=True),
                 streamed_answer=streamed_answer,
             )
 
@@ -522,31 +624,9 @@ def _next_step(state: WorkflowState, allowed: set[str]) -> str:
     return str(next_step)
 
 
-def _sections(content: str | None) -> dict[str, str]:
-    """Parse bracketed sections like [plan] or [answer]."""
-    text = _strip_code_fences(content)
-    return {
-        match.group(1).strip().lower(): match.group(2).strip()
-        for match in SECTION_PATTERN.finditer(text)
-    }
-
-
-def _strip_code_fences(content: str | None) -> str:
-    """Remove one outer markdown code fence when present."""
-    text = (content or "").strip()
-    if text.startswith("```") and text.endswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 3:
-            return "\n".join(lines[1:-1]).strip()
-    return text
-
-
-def _required_text(value: Any, label: str) -> str:
-    """Read one required string-like value."""
-    text = " ".join(str(value or "").split())
-    if not text:
-        raise ValueError(f"Workflow node is missing '{label}'.")
-    return text
+def _sections(content: str | None, *, allow_unclosed: bool = False) -> dict[str, str]:
+    """Parse workflow sections, preferring paired XML-style tags."""
+    return parse_workflow_sections(content, allow_unclosed=allow_unclosed)
 
 
 def _required_block(value: Any, label: str) -> str:
@@ -584,8 +664,18 @@ def _decision_action(sections: dict[str, str], *, node: str) -> str:
     if has_answer and not has_retrieve:
         return WorkflowStep.ANSWER.value
     raise ValueError(
-        f"{node.title()} node must include exactly one of [retrieve] or [answer]."
+        f"{node.title()} node must include exactly one of <retrieve> or <answer>."
     )
+
+
+def _fallback_answer_from_node_only_response(sections: dict[str, str], *, node: str) -> str | None:
+    """Treat a completed think-only response as an answer instead of failing the turn."""
+    if node != WorkflowStep.THINK.value:
+        return None
+    if _has_action_block(sections, "retrieve") or _has_action_block(sections, "answer"):
+        return None
+    answer = _required_block(sections.get(node), "answer")
+    return answer
 
 
 def _has_action_block(sections: dict[str, str], name: str) -> bool:

@@ -2,6 +2,7 @@ import asyncio
 import copy
 import json
 import re
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any
 from uuid import uuid4
@@ -16,6 +17,7 @@ from eco_rag.chat.registry import (
     ChatModelSettings,
     EmbeddingModelSettings,
     ModelSettingsDocument,
+    build_chat_model,
     get_active_chat_model_settings,
     load_model_settings_document,
     normalize_chat_model_settings,
@@ -38,6 +40,9 @@ from eco_rag.indexing import (
     resolve_database_embedding_settings,
     select_database_settings,
 )
+from eco_rag.indexing.errors import IndexingError
+from eco_rag.settings import AppSettings, load_app_settings, save_app_settings
+from eco_rag.skills import SkillRecord, SkillSettingsDocument, load_skill_settings_document, save_skill_settings_document
 from eco_rag.workflow import WorkflowStatus, WorkflowStep
 from eco_rag.workflow.prompts import default_system_prompt
 
@@ -92,6 +97,8 @@ class UploadJobFileResponse(BaseModel):
     chunk_count: int = 0
     embedded_chunks: int = 0
     progress: float = 0.0
+    message: str = ""
+    error: str | None = None
 
 
 class UploadJobResponse(BaseModel):
@@ -107,6 +114,9 @@ class UploadJobResponse(BaseModel):
     current_file_name: str | None = None
     files: list[UploadJobFileResponse] = Field(default_factory=list)
     error: str | None = None
+    error_stage: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class CreateSessionRequest(BaseModel):
@@ -142,7 +152,7 @@ class ChatModelSettingsRequest(BaseModel):
     base_url: str | None = None
     temperature: float = 1.0
     top_p: float | None = None
-    enable_thinking: bool | None = None
+    custom_request_params: dict[str, Any] | None = None
 
     def to_settings(self) -> ChatModelSettings:
         return normalize_chat_model_settings(self.model_dump())
@@ -193,6 +203,72 @@ class ModelSettingsDocumentRequest(BaseModel):
         )
 
 
+class ModelApiTestRequest(BaseModel):
+    kind: str
+    chat_model: ChatModelSettingsRequest | None = None
+    embedding_model: EmbeddingModelSettingsRequest | None = None
+
+
+class ModelApiTestResponse(BaseModel):
+    ok: bool
+    message: str
+
+
+class AppSettingsRequest(BaseModel):
+    chunk_size: int = Field(default=Config.CHUNK_SIZE, ge=1)
+    chunk_overlap: int = Field(default=Config.CHUNK_OVERLAP, ge=0)
+    max_retrieve_rounds: int = Field(default=10, ge=1)
+    use_marker_pdf_loader: bool = True
+    web_search_backend: str = "auto"
+
+    def to_settings(self) -> AppSettings:
+        return AppSettings(**self.model_dump())
+
+    @classmethod
+    def from_settings(cls, settings: AppSettings):
+        return cls(
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            max_retrieve_rounds=settings.max_retrieve_rounds,
+            use_marker_pdf_loader=settings.use_marker_pdf_loader,
+            web_search_backend=settings.web_search_backend,
+        )
+
+
+class SkillRecordRequest(BaseModel):
+    name: str
+    description: str
+    content: str
+    enabled: bool = True
+    default: bool = False
+    protected: bool = False
+
+    def to_record(self) -> SkillRecord:
+        return SkillRecord(
+            name=self.name,
+            description=self.description,
+            content=self.content,
+            enabled=self.enabled,
+            default=self.default,
+            protected=self.protected,
+        )
+
+    @classmethod
+    def from_record(cls, record: SkillRecord):
+        return cls(**record.__dict__)
+
+
+class SkillSettingsDocumentRequest(BaseModel):
+    skills: list[SkillRecordRequest] = Field(default_factory=list)
+
+    def to_document(self) -> SkillSettingsDocument:
+        return SkillSettingsDocument(skills=[item.to_record() for item in self.skills])
+
+    @classmethod
+    def from_document(cls, document: SkillSettingsDocument):
+        return cls(skills=[SkillRecordRequest.from_record(item) for item in document.skills])
+
+
 class SendMessageRequest(BaseModel):
     message: str = Field(min_length=1)
     system_prompt: str | None = None
@@ -215,7 +291,7 @@ def create_app(chat_service: ChatService | None = None):
         description="Backend entrypoint for the Eco_RAG desktop and web clients.",
     )
     service = chat_service or ChatService()
-    upload_jobs: dict[str, dict[str, Any]] = {}
+    upload_jobs: dict[str, dict[str, Any]] = _load_upload_jobs()
     upload_jobs_lock = Lock()
 
     @app.get("/", include_in_schema=False)
@@ -243,6 +319,70 @@ def create_app(chat_service: ChatService | None = None):
     @app.put("/api/model-settings", response_model=ModelSettingsDocumentRequest)
     def update_model_settings(payload: ModelSettingsDocumentRequest):
         return ModelSettingsDocumentRequest.from_document(save_model_settings_document(payload.to_document()))
+
+    @app.post("/api/model-settings/test", response_model=ModelApiTestResponse)
+    async def test_model_settings(payload: ModelApiTestRequest):
+        kind = payload.kind.strip().lower()
+        try:
+            if kind == "chat":
+                if payload.chat_model is None:
+                    raise ValueError("Chat model settings are required.")
+                model = normalize_chat_model_settings(payload.chat_model.model_dump())
+                response = await build_chat_model(model).generate_response(
+                    [{"role": "user", "content": "Reply with only OK."}]
+                )
+                preview = (response.content or "").strip()
+                suffix = f": {preview[:80]}" if preview else "."
+                return ModelApiTestResponse(
+                    ok=True,
+                    message=f"Chat API test succeeded{suffix}",
+                )
+
+            if kind == "embedding":
+                if payload.embedding_model is None:
+                    raise ValueError("Embedding model settings are required.")
+                settings = normalize_embedding_model_settings(payload.embedding_model.model_dump())
+                embeddings = OpenAICompatibleEmbedder.embed_documents("Eco RAG API test", settings=settings)
+                dimensions = len(embeddings[0]) if embeddings else 0
+                if dimensions <= 0:
+                    raise ValueError("Embedding provider returned an empty vector.")
+                return ModelApiTestResponse(ok=True, message=f"Embedding API test succeeded. Vector dimensions: {dimensions}.")
+
+            raise ValueError("Model test kind must be 'chat' or 'embedding'.")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/app-settings", response_model=AppSettingsRequest)
+    def get_app_settings():
+        return AppSettingsRequest.from_settings(load_app_settings())
+
+    @app.put("/api/app-settings", response_model=AppSettingsRequest)
+    def update_app_settings(payload: AppSettingsRequest):
+        current = load_app_settings()
+        next_settings = AppSettings(
+            chunk_size=payload.chunk_size,
+            chunk_overlap=payload.chunk_overlap,
+            max_retrieve_rounds=payload.max_retrieve_rounds,
+            use_marker_pdf_loader=payload.use_marker_pdf_loader,
+            web_search_backend=payload.web_search_backend,
+            enabled_skills=current.enabled_skills,
+            default_skills=current.default_skills,
+        )
+        return AppSettingsRequest.from_settings(save_app_settings(next_settings))
+
+    @app.get("/api/skills", response_model=SkillSettingsDocumentRequest)
+    def get_skill_settings():
+        try:
+            return SkillSettingsDocumentRequest.from_document(load_skill_settings_document())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/skills", response_model=SkillSettingsDocumentRequest)
+    def update_skill_settings(payload: SkillSettingsDocumentRequest):
+        try:
+            return SkillSettingsDocumentRequest.from_document(save_skill_settings_document(payload.to_document()))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/databases", response_model=DatabaseStateResponse)
     def list_databases():
@@ -319,6 +459,8 @@ def create_app(chat_service: ChatService | None = None):
                     continue
                 assembler.delete_file(str(saved_path))
                 assembler.store_file(str(saved_path))
+        except IndexingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return DatabaseStateResponse(**_database_state_payload())
@@ -341,6 +483,7 @@ def create_app(chat_service: ChatService | None = None):
         job = _create_upload_job_state(job_id, database_id, saved_paths)
         with upload_jobs_lock:
             upload_jobs[job_id] = job
+            _persist_upload_jobs(upload_jobs)
         asyncio.create_task(
             asyncio.to_thread(
                 _process_database_upload_job,
@@ -353,6 +496,11 @@ def create_app(chat_service: ChatService | None = None):
             )
         )
         return UploadJobResponse(**_get_upload_job_or_404(upload_jobs, upload_jobs_lock, database_id, job_id))
+
+    @app.get("/api/databases/{database_id}/documents/jobs/current", response_model=UploadJobResponse | None)
+    def get_current_database_upload_job(database_id: str):
+        job = _get_current_upload_job(upload_jobs, upload_jobs_lock, database_id)
+        return UploadJobResponse(**job) if job else None
 
     @app.get("/api/databases/{database_id}/documents/jobs/{job_id}", response_model=UploadJobResponse)
     def get_database_upload_job(database_id: str, job_id: str):
@@ -570,6 +718,7 @@ async def _save_uploaded_document(upload: UploadFile, collection_name: str):
 
 
 def _create_upload_job_state(job_id: str, database_id: str, saved_paths) -> dict[str, Any]:
+    now = _utc_now()
     files = [
         {
             "id": str(path),
@@ -578,6 +727,8 @@ def _create_upload_job_state(job_id: str, database_id: str, saved_paths) -> dict
             "chunk_count": 0,
             "embedded_chunks": 0,
             "progress": 0.0,
+            "message": "",
+            "error": None,
         }
         for path in saved_paths
     ]
@@ -594,7 +745,55 @@ def _create_upload_job_state(job_id: str, database_id: str, saved_paths) -> dict
         "current_file_name": None,
         "files": files,
         "error": None,
+        "error_stage": None,
+        "created_at": now,
+        "updated_at": now,
     }
+
+
+def _upload_jobs_path():
+    return Config.DATA_DIR / "upload_jobs.json"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _load_upload_jobs() -> dict[str, dict[str, Any]]:
+    path = _upload_jobs_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    jobs = payload.get("jobs", payload)
+    if not isinstance(jobs, dict):
+        return {}
+    restored: dict[str, dict[str, Any]] = {}
+    for job_id, job in jobs.items():
+        if not isinstance(job, dict):
+            continue
+        if job.get("status") in {"queued", "processing"}:
+            job = {
+                **job,
+                "status": "failed",
+                "error": "Upload job was interrupted by server restart.",
+                "error_stage": "interrupted",
+                "message": "Upload job was interrupted by server restart.",
+                "updated_at": _utc_now(),
+            }
+        restored[str(job_id)] = job
+    return restored
+
+
+def _persist_upload_jobs(upload_jobs: dict[str, dict[str, Any]]):
+    path = _upload_jobs_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"jobs": upload_jobs}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _get_upload_job_or_404(
@@ -608,6 +807,23 @@ def _get_upload_job_or_404(
         if job is None or job.get("database_id") != database_id:
             raise HTTPException(status_code=404, detail="Upload job not found.")
         return copy.deepcopy(job)
+
+
+def _get_current_upload_job(
+    upload_jobs: dict[str, dict[str, Any]],
+    upload_jobs_lock: Lock,
+    database_id: str,
+) -> dict[str, Any] | None:
+    with upload_jobs_lock:
+        candidates = [
+            job
+            for job in upload_jobs.values()
+            if job.get("database_id") == database_id and job.get("status") in {"queued", "processing"}
+        ]
+        if not candidates:
+            return None
+        latest = max(candidates, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""))
+        return copy.deepcopy(latest)
 
 
 def _process_database_upload_job(
@@ -627,6 +843,7 @@ def _process_database_upload_job(
         database=database,
     )
 
+    current_path = None
     try:
         _update_upload_job(
             upload_jobs,
@@ -636,6 +853,7 @@ def _process_database_upload_job(
             message="Preparing uploaded documents...",
         )
         for saved_path in saved_paths:
+            current_path = saved_path
             source_name = _source_name_from_path(saved_path)
             if skip_existing and _database_has_uploaded_file(vector_db, saved_path):
                 _update_upload_job_file(
@@ -664,18 +882,31 @@ def _process_database_upload_job(
                 status="processing",
                 progress=0.01,
             )
-            assembler.delete_file(str(saved_path))
-            assembler.store_file(
-                str(saved_path),
-                progress_callback=lambda stage, payload, current_path=saved_path: _handle_upload_progress_event(
+            try:
+                assembler.delete_file(str(saved_path))
+                assembler.store_file(
+                    str(saved_path),
+                    progress_callback=lambda stage, payload, current_path=saved_path: _handle_upload_progress_event(
+                        upload_jobs,
+                        upload_jobs_lock,
+                        job_id,
+                        current_path,
+                        stage,
+                        payload,
+                    ),
+                )
+            except Exception as exc:
+                error_message = _format_upload_error(exc)
+                _update_upload_job_file(
                     upload_jobs,
                     upload_jobs_lock,
                     job_id,
-                    current_path,
-                    stage,
-                    payload,
-                ),
-            )
+                    saved_path,
+                    status="failed",
+                    error=error_message,
+                    message=error_message,
+                )
+                raise
             _update_upload_job_file(
                 upload_jobs,
                 upload_jobs_lock,
@@ -696,13 +927,16 @@ def _process_database_upload_job(
             message=_build_upload_completion_message(_get_upload_job_or_404(upload_jobs, upload_jobs_lock, database.id, job_id)),
         )
     except Exception as exc:
+        error_message = _format_upload_error(exc)
         _update_upload_job(
             upload_jobs,
             upload_jobs_lock,
             job_id,
             status="failed",
-            error=str(exc),
-            message=f"Upload failed: {exc}",
+            error=error_message,
+            error_stage=_upload_error_stage(exc),
+            message=error_message,
+            current_file_name=_source_name_from_path(current_path) if current_path else None,
         )
 
 
@@ -721,8 +955,24 @@ def _handle_upload_progress_event(
     if stage == "load_started":
         updates["progress"] = 0.02
         message = f"Loading {source_name}..."
+    elif stage == "marker_started":
+        updates["progress"] = 0.03
+        message = str(payload.get("message") or f"Converting {source_name} with Marker...")
+    elif stage == "marker_progress":
+        percent = _optional_float(payload.get("percent"))
+        if percent is None:
+            updates["progress"] = 0.04
+        else:
+            updates["progress"] = 0.03 + (0.07 * min(max(percent, 0.0), 100.0) / 100)
+        message = str(payload.get("message") or f"Converting {source_name} with Marker...")
+    elif stage == "marker_complete":
+        updates["progress"] = 0.1
+        message = str(payload.get("message") or f"Converted {source_name} with Marker.")
+    elif stage == "marker_fallback":
+        updates["progress"] = 0.05
+        message = str(payload.get("message") or f"Marker unavailable for {source_name}; using PyPDF2...")
     elif stage == "load_complete":
-        updates["progress"] = 0.08
+        updates["progress"] = 0.1
         message = f"Loaded {source_name}."
     elif stage == "chunk_started":
         updates["progress"] = 0.12
@@ -780,8 +1030,10 @@ def _update_upload_job(
         job = upload_jobs.get(job_id)
         if job is None:
             return
+        job["updated_at"] = _utc_now()
         job.update(updates)
         _recalculate_upload_job(job)
+        _persist_upload_jobs(upload_jobs)
 
 
 def _update_upload_job_file(
@@ -795,12 +1047,21 @@ def _update_upload_job_file(
         job = upload_jobs.get(job_id)
         if job is None:
             return
+        job["updated_at"] = _utc_now()
         for file_entry in job.get("files", []):
             if file_entry.get("id") == saved_path:
                 file_entry.update({key: value for key, value in updates.items() if key in file_entry})
                 break
         job.update({key: value for key, value in updates.items() if key not in {"chunk_count", "embedded_chunks", "progress", "status"}})
         _recalculate_upload_job(job)
+        _persist_upload_jobs(upload_jobs)
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _recalculate_upload_job(job: dict[str, Any]):
@@ -822,6 +1083,16 @@ def _recalculate_upload_job(job: dict[str, Any]):
 
 def _source_name_from_path(saved_path: str) -> str:
     return saved_path.replace("\\", "/").rstrip("/").split("/")[-1]
+
+
+def _format_upload_error(exc: Exception) -> str:
+    if isinstance(exc, IndexingError):
+        return str(exc)
+    return f"Indexing failed: {exc}"
+
+
+def _upload_error_stage(exc: Exception) -> str | None:
+    return exc.stage if isinstance(exc, IndexingError) else None
 
 
 def _database_has_uploaded_file(vector_db: VectorDatabase, saved_path: str) -> bool:

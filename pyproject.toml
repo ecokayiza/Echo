@@ -27,4 +27,4 @@ include = ["eco_rag*"]
 
 [tool.setuptools.package-data]
 "eco_rag.workflow" = ["prompt_templates/*.yaml"]
-"eco_rag.skills" = ["*.md"]
+"eco_rag.skills" = ["*.md", "*/SKILL.md"]

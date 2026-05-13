@@ -3,12 +3,6 @@ import { startTransition, useEffect, useReducer, useRef, useState } from "react"
 import { api } from "@/lib/api";
 import { formatNumber, trimOrNull } from "@/lib/format";
 import {
-  createEmptyChatModel,
-  createEmptyEmbeddingModel,
-  getActiveChatModel,
-  normalizeModelSettingsDocument,
-} from "@/lib/model-settings";
-import {
   getDefaultPrompt,
   findPreviousUserIndex,
   getPreferredSessionId,
@@ -20,18 +14,16 @@ import { readEventStream } from "@/lib/sse";
 import { storage } from "@/lib/storage";
 import { setSessionIdInUrl } from "@/lib/url-state";
 import { buildFailedWorkflow, buildPendingWorkflow, normalizeWorkflow } from "@/lib/workflow";
+import { useSettingsManagement } from "@/hooks/useSettingsManagement";
 import type {
-  ChatModelConfig,
   ChatResponse,
   ConfirmDialogState,
   DatabaseDocumentRecord,
   DatabaseRecord,
   DatabaseState,
-  EmbeddingModelConfig,
   HealthResponse,
   MessageRecord,
   MetaResponse,
-  ModelSettingsDocument,
   SessionState,
   SessionSummary,
   UploadJobRecord,
@@ -174,6 +166,9 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         workflow: action.workflow,
       };
     case "upload-job:set":
+      if (action.uploadJob && state.activeDatabaseId && action.uploadJob.database_id !== state.activeDatabaseId) {
+        return state;
+      }
       return {
         ...state,
         uploadJob: action.uploadJob,
@@ -301,27 +296,21 @@ export function useChatWorkspace() {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [messageDraft, setMessageDraft] = useState("");
   const [systemPromptDraft, setSystemPromptDraft] = useState("");
-  const [modelSettings, setModelSettings] = useState<ModelSettingsDocument>(
-    normalizeModelSettingsDocument({
-      chat_models: [],
-      embedding_models: [],
-    })
-  );
-  const [modelSettingsDraft, setModelSettingsDraft] = useState<ModelSettingsDocument>(
-    normalizeModelSettingsDocument({
-      chat_models: [],
-      embedding_models: [],
-    })
-  );
-  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
-  const [embeddingModelSettingsOpen, setEmbeddingModelSettingsOpen] = useState(false);
   const [databaseSettingsOpen, setDatabaseSettingsOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const uploadPollRef = useRef<string | null>(null);
+  const settings = useSettingsManagement({
+    onRuntimeSettingsRefresh: (health, meta) => {
+      dispatch({ type: "bootstrap", meta, health });
+    },
+    onStatus: (text, tone, liveLabel) => {
+      dispatch({ type: "status", text, tone, liveLabel });
+    },
+    withBusy,
+  });
 
   const activeSession = state.sessions.find((session) => session.session_id === state.sessionId) ?? null;
-  const activeChatModel = getActiveChatModel(modelSettings);
-  const activeModelName = activeChatModel?.name ?? "Not configured";
   const activePrompt = getPromptFromMessages(state.messages, getDefaultPrompt(state.meta));
   const systemPromptDirty = systemPromptDraft !== activePrompt;
   const totalStoredTokens = state.sessions.reduce((sum, session) => sum + (session.total_tokens || 0), 0);
@@ -331,10 +320,12 @@ export function useChatWorkspace() {
 
     async function boot() {
       try {
-        const [health, meta, modelSettings, databaseState] = await Promise.all([
+        const [health, meta, modelSettings, skillSettings, appSettings, databaseState] = await Promise.all([
           api.getHealth(),
           api.getMeta(),
           api.getModelSettings(),
+          api.getSkills(),
+          api.getAppSettings(),
           api.listDatabases(),
         ]);
         if (cancelled) {
@@ -342,9 +333,7 @@ export function useChatWorkspace() {
         }
 
         dispatch({ type: "bootstrap", meta, health });
-        const normalizedModelSettings = normalizeModelSettingsDocument(modelSettings);
-        setModelSettings(normalizedModelSettings);
-        setModelSettingsDraft(normalizedModelSettings);
+        settings.actions.applyPersistedSettings(modelSettings, skillSettings, appSettings);
 
         const nextPrompt = storage.getSystemPrompt() ?? meta.default_system_prompt;
         setSystemPromptDraft(nextPrompt);
@@ -463,20 +452,6 @@ export function useChatWorkspace() {
     }
   }
 
-  async function refreshModelSettingsState(nextSettings: ModelSettingsDocument) {
-    const [health, meta] = await Promise.all([api.getHealth(), api.getMeta()]);
-    const normalizedModelSettings = normalizeModelSettingsDocument(nextSettings);
-    setModelSettings(normalizedModelSettings);
-    setModelSettingsDraft(normalizedModelSettings);
-    dispatch({ type: "bootstrap", meta, health });
-  }
-
-  async function persistModelSettings(nextSettings: ModelSettingsDocument) {
-    const savedSettings = await api.updateModelSettings(normalizeModelSettingsDocument(nextSettings));
-    await refreshModelSettingsState(savedSettings);
-    return savedSettings;
-  }
-
   async function loadSessionSnapshot(sessionId: string) {
     const payload = await api.getSession(sessionId);
     applySessionPayload(payload);
@@ -516,6 +491,81 @@ export function useChatWorkspace() {
     }
   }
 
+  function startDatabaseUploadJobPolling(databaseId: string, jobId: string, completionLabel?: string) {
+    const pollKey = `${databaseId}:${jobId}`;
+    if (uploadPollRef.current === pollKey) {
+      return;
+    }
+
+    uploadPollRef.current = pollKey;
+    void (async () => {
+      try {
+        const finishedJob = await pollDatabaseUploadJob(databaseId, jobId);
+        if (finishedJob.status === "failed") {
+          dispatch({
+            type: "status",
+            text: finishedJob.error || finishedJob.message || "Embedding upload failed.",
+            tone: "error",
+            liveLabel: "Error",
+          });
+          return;
+        }
+
+        await refreshDatabaseState();
+        startTransition(() => {
+          dispatch({ type: "upload-job:set", uploadJob: null });
+        });
+        dispatch({
+          type: "status",
+          text: completionLabel || finishedJob.message || "Upload completed.",
+          tone: "success",
+          liveLabel: "Ready",
+        });
+      } catch (error) {
+        dispatch({ type: "status", text: getErrorMessage(error), tone: "error", liveLabel: "Error" });
+      } finally {
+        if (uploadPollRef.current === pollKey) {
+          uploadPollRef.current = null;
+        }
+      }
+    })();
+  }
+
+  useEffect(() => {
+    const databaseId = state.activeDatabaseId;
+    if (!databaseId) {
+      return;
+    }
+    const activeDatabaseId = databaseId;
+
+    let cancelled = false;
+    async function restoreUploadJob() {
+      try {
+        const uploadJob = await api.getCurrentDatabaseUploadJob(activeDatabaseId);
+        if (cancelled || !uploadJob) {
+          return;
+        }
+        startTransition(() => {
+          dispatch({ type: "upload-job:set", uploadJob });
+        });
+        dispatch({
+          type: "status",
+          text: uploadJob.message || "Embedding ...",
+          tone: "neutral",
+          liveLabel: "Working",
+        });
+        startDatabaseUploadJobPolling(activeDatabaseId, uploadJob.job_id);
+      } catch {
+        // Missing or stale jobs should not block loading the workspace.
+      }
+    }
+
+    void restoreUploadJob();
+    return () => {
+      cancelled = true;
+    };
+  }, [state.activeDatabaseId]);
+
   async function selectSession(sessionId: string) {
     syncSelectedSession(sessionId);
 
@@ -531,7 +581,11 @@ export function useChatWorkspace() {
   }
 
   async function createSession(title?: string | null) {
-    if ((state.messages.length === 0 || (state.messages.length === 1 && state.messages[0].role === "system")) && !state.busy) {
+    if (
+      state.sessionId &&
+      (state.messages.length === 0 || (state.messages.length === 1 && state.messages[0].role === "system")) &&
+      !state.busy
+    ) {
       // 没有任何实质内容时反复点击New Session，不真正发请求，仅仅让界面Focus或者反馈
       dispatch({ type: "status", text: "Already in a blank session.", tone: "neutral", liveLabel: "Ready" });
       return;
@@ -598,197 +652,12 @@ export function useChatWorkspace() {
     setSystemPromptDraft(activePrompt || state.meta?.default_system_prompt || "");
   }
 
-  function setActiveChatModel(name: string) {
-    setModelSettingsDraft((current) =>
-      normalizeModelSettingsDocument({
-        ...current,
-        active_chat_model: name,
-      })
-    );
-  }
-
-  function setActiveEmbeddingModel(name: string) {
-    setModelSettingsDraft((current) =>
-      normalizeModelSettingsDocument({
-        ...current,
-        active_embedding_model: name,
-      })
-    );
-  }
-
-  function updateChatModel<Key extends keyof ChatModelConfig>(index: number, key: Key, value: ChatModelConfig[Key]) {
-    setModelSettingsDraft((current) => {
-      const previous = current.chat_models[index];
-      if (!previous) {
-        return current;
-      }
-
-      const nextName = key === "name" ? (typeof value === "string" ? value : previous.name) : previous.name;
-      const nextActiveName =
-        key === "name" && current.active_chat_model === previous.name && typeof value === "string"
-          ? value
-          : current.active_chat_model;
-
-      return normalizeModelSettingsDocument({
-        ...current,
-        active_chat_model: nextActiveName,
-        chat_models: replaceAtIndex(current.chat_models, index, {
-          ...previous,
-          [key]: value,
-          ...(key === "name" ? { name: nextName } : {}),
-        }),
-      });
-    });
-  }
-
-  function updateEmbeddingModel<Key extends keyof EmbeddingModelConfig>(
-    index: number,
-    key: Key,
-    value: EmbeddingModelConfig[Key]
-  ) {
-    setModelSettingsDraft((current) => {
-      const previous = current.embedding_models[index];
-      if (!previous) {
-        return current;
-      }
-
-      const nextName = key === "name" ? (typeof value === "string" ? value : previous.name) : previous.name;
-      const nextActiveName =
-        key === "name" && current.active_embedding_model === previous.name && typeof value === "string"
-          ? value
-          : current.active_embedding_model;
-
-      return normalizeModelSettingsDocument({
-        ...current,
-        active_embedding_model: nextActiveName,
-        embedding_models: replaceAtIndex(current.embedding_models, index, {
-          ...previous,
-          [key]: value,
-          ...(key === "name" ? { name: nextName } : {}),
-        }),
-      });
-    });
-  }
-
-  function addChatModel(initial?: Partial<ChatModelConfig>) {
-    setModelSettingsDraft((current) =>
-      normalizeModelSettingsDocument({
-        ...current,
-        chat_models: [...current.chat_models, createEmptyChatModel(current.chat_models.length + 1, initial)],
-      })
-    );
-  }
-
-  function addEmbeddingModel(initial?: Partial<EmbeddingModelConfig>) {
-    setModelSettingsDraft((current) =>
-      normalizeModelSettingsDocument({
-        ...current,
-        embedding_models: [...current.embedding_models, createEmptyEmbeddingModel(current.embedding_models.length + 1, initial)],
-      })
-    );
-  }
-
-  function removeChatModel(index: number) {
-    setModelSettingsDraft((current) =>
-      normalizeModelSettingsDocument({
-        ...current,
-        chat_models: current.chat_models.filter((_, itemIndex) => itemIndex !== index),
-      })
-    );
-  }
-
-  function removeEmbeddingModel(index: number) {
-    setModelSettingsDraft((current) =>
-      normalizeModelSettingsDocument({
-        ...current,
-        embedding_models: current.embedding_models.filter((_, itemIndex) => itemIndex !== index),
-      })
-    );
-  }
-
-  function openModelSettings() {
-    setModelSettingsDraft(modelSettings);
-    setModelSettingsOpen(true);
-  }
-
-  function closeModelSettings() {
-    setModelSettingsDraft(modelSettings);
-    setModelSettingsOpen(false);
-  }
-
-  function openEmbeddingModelSettings() {
-    setModelSettingsDraft(modelSettings);
-    setEmbeddingModelSettingsOpen(true);
-  }
-
-  function closeEmbeddingModelSettings() {
-    setModelSettingsDraft(modelSettings);
-    setEmbeddingModelSettingsOpen(false);
-  }
-
   function openDatabaseSettings() {
     setDatabaseSettingsOpen(true);
   }
 
   function closeDatabaseSettings() {
     setDatabaseSettingsOpen(false);
-  }
-
-  async function selectActiveChatModel(name: string) {
-    if (!name || modelSettings.active_chat_model === name) {
-      return;
-    }
-
-    await withBusy(
-      "Switching active model...",
-      async () => {
-        const nextSettings = normalizeModelSettingsDocument({
-          ...modelSettings,
-          active_chat_model: name,
-        });
-        await persistModelSettings(nextSettings);
-        dispatch({ type: "status", text: "Active model updated.", tone: "success", liveLabel: "Ready" });
-      },
-      async (detail) => {
-        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
-      }
-    );
-  }
-
-  async function saveModelSettings(updatedSettings?: ModelSettingsDocument) {
-    const dataToSave = updatedSettings ?? modelSettingsDraft;
-    await withBusy(
-      "Saving model settings...",
-      async () => {
-        await persistModelSettings(dataToSave);
-        if (updatedSettings) {
-          setModelSettingsDraft(dataToSave);
-        }
-        setModelSettingsOpen(false);
-        dispatch({ type: "status", text: "Model settings saved.", tone: "success", liveLabel: "Ready" });
-      },
-      async (detail) => {
-        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
-      }
-    );
-  }
-
-  async function saveEmbeddingModelSettings(updatedSettings?: ModelSettingsDocument) {
-    const dataToSave = updatedSettings ?? modelSettingsDraft;
-    await withBusy(
-      "Saving embedding model settings...",
-      async () => {
-        await persistModelSettings(dataToSave);
-        if (updatedSettings) {
-          setModelSettingsDraft(dataToSave);
-        }
-        setEmbeddingModelSettingsOpen(false);
-        dispatch({ type: "status", text: "Embedding model settings saved.", tone: "success", liveLabel: "Ready" });
-      },
-      async (detail) => {
-        dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
-      }
-    );
   }
 
   async function selectDatabase(databaseId: string) {
@@ -873,23 +742,14 @@ export function useChatWorkspace() {
       startTransition(() => {
         dispatch({ type: "upload-job:set", uploadJob: createdJob });
       });
-      const finishedJob = await pollDatabaseUploadJob(targetDatabaseId, createdJob.job_id);
-      if (finishedJob.status === "failed") {
-        throw new Error(finishedJob.error || finishedJob.message || "Embedding upload failed.");
-      }
-      await refreshDatabaseState();
-      startTransition(() => {
-        dispatch({ type: "upload-job:set", uploadJob: null });
-      });
-      dispatch({
-        type: "status",
-        text:
-          files.length === 1
-            ? `Finished "${files[0].name}". Existing files were skipped automatically.`
-            : `Finished ${files.length} documents. Existing files were skipped automatically.`,
-        tone: "success",
-        liveLabel: "Ready",
-      });
+      dispatch({ type: "status", text: createdJob.message || "Embedding upload queued.", tone: "neutral", liveLabel: "Working" });
+      startDatabaseUploadJobPolling(
+        targetDatabaseId,
+        createdJob.job_id,
+        files.length === 1
+          ? `Finished "${files[0].name}". Existing files were skipped automatically.`
+          : `Finished ${files.length} documents. Existing files were skipped automatically.`
+      );
     } catch (error) {
       dispatch({ type: "status", text: getErrorMessage(error), tone: "error", liveLabel: "Error" });
     } finally {
@@ -1354,32 +1214,81 @@ export function useChatWorkspace() {
     workspace: {
       state,
       activeSession,
-      activeModelName,
-      modelNames: modelSettings.chat_models.map((item) => item.name),
-      embeddingModelNames: modelSettings.embedding_models.map((item) => item.name),
-      databaseDocuments: state.databaseDocuments,
-      uploadJob: state.uploadJob,
       totalStoredTokens,
       formatNumber,
     },
-    drafts: {
-      messageDraft,
-      setMessageDraft,
-      systemPromptDraft,
+    settings: {
+      activeModelName: settings.activeModelName,
+      embeddingModelNames: settings.embeddingModelNames,
+      modelNames: settings.modelNames,
+      pageOpen: settings.pageOpen,
+      drafts: settings.drafts,
+      actions: {
+        addChatModel: settings.actions.addChatModel,
+        addEmbeddingModel: settings.actions.addEmbeddingModel,
+        addSkill: settings.actions.addSkill,
+        close: settings.actions.closeSettingsPage,
+        open: settings.actions.openSettingsPage,
+        removeChatModel: settings.actions.removeChatModel,
+        removeEmbeddingModel: settings.actions.removeEmbeddingModel,
+        removeSkill: settings.actions.removeSkill,
+        save: settings.actions.saveManagementSettings,
+        selectActiveChatModel: settings.actions.selectActiveChatModel,
+        setActiveChatModel: settings.actions.setActiveChatModel,
+        setActiveEmbeddingModel: settings.actions.setActiveEmbeddingModel,
+        testChatModel: settings.actions.testChatModel,
+        testEmbeddingModel: settings.actions.testEmbeddingModel,
+        updateAppSetting: settings.actions.updateAppSetting,
+        updateChatModel: settings.actions.updateChatModel,
+        updateEmbeddingModel: settings.actions.updateEmbeddingModel,
+        updateSkill: settings.actions.updateSkill,
+      },
+    },
+    database: {
+      activeDatabaseId: state.activeDatabaseId,
+      databases: state.databases,
+      documents: state.databaseDocuments,
+      settingsOpen: databaseSettingsOpen,
+      uploadJob: state.uploadJob,
+      actions: {
+        closeSettings: closeDatabaseSettings,
+        create: createDatabase,
+        openDeleteDatabaseDialog,
+        openDeleteDocumentDialog: openDeleteDatabaseDocumentDialog,
+        openSettings: openDatabaseSettings,
+        rename: renameDatabase,
+        renameDocument: renameDatabaseDocument,
+        select: selectDatabase,
+        uploadDocuments: uploadDatabaseDocuments,
+      },
+    },
+    sessions: {
+      activeSession,
+      activeSessionId: state.sessionId,
+      sessions: state.sessions,
+      actions: {
+        create: createSession,
+        openDeleteDialog: openDeleteSessionDialog,
+        rename: renameSession,
+        select: selectSession,
+      },
+    },
+    messages: {
+      draft: messageDraft,
+      items: state.messages,
+      setDraft: setMessageDraft,
       setSystemPromptDraft,
       systemPromptDirty,
-      modelSettingsDraft,
-      modelSettingsOpen,
-      embeddingModelSettingsOpen,
-      databaseSettingsOpen,
-      setActiveChatModel,
-      setActiveEmbeddingModel,
-      updateChatModel,
-      updateEmbeddingModel,
-      addChatModel,
-      addEmbeddingModel,
-      removeChatModel,
-      removeEmbeddingModel,
+      systemPromptDraft,
+      actions: {
+        applySystemPrompt,
+        openDeleteDialog: openDeleteMessageDialog,
+        openRollbackDialog,
+        regenerate: regenerateMessage,
+        resetSystemPromptDraft,
+        send: sendMessage,
+        updateContent: updateMessageContent,
+      },
     },
     dialogs: {
       confirmDialog,
@@ -1387,35 +1296,6 @@ export function useChatWorkspace() {
     },
     refs: {
       messageInputRef,
-    },
-    actions: {
-      selectSession,
-      createSession,
-      applySystemPrompt,
-      resetSystemPromptDraft,
-      openModelSettings,
-      closeModelSettings,
-      openEmbeddingModelSettings,
-      closeEmbeddingModelSettings,
-      openDatabaseSettings,
-      closeDatabaseSettings,
-      selectActiveChatModel,
-      saveModelSettings,
-      saveEmbeddingModelSettings,
-      selectDatabase,
-      createDatabase,
-      renameDatabase,
-      uploadDatabaseDocuments,
-      renameDatabaseDocument,
-      openDeleteDatabaseDocumentDialog,
-      openDeleteDatabaseDialog,
-      renameSession,
-      openDeleteSessionDialog,
-      updateMessageContent,
-      openDeleteMessageDialog,
-      openRollbackDialog,
-      regenerateMessage,
-      sendMessage,
     },
   };
 }

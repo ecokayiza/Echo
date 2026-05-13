@@ -1,5 +1,14 @@
 {
-  "max_context_messages": 12,
-  "max_retrieve_rounds": 2,
-  "prompt_truncate_chars": 500
+  "chunk_size": 800,
+  "chunk_overlap": 50,
+  "max_retrieve_rounds": 10,
+  "use_marker_pdf_loader": true,
+  "web_search_backend": "auto",
+  "enabled_skills": [
+    "search",
+    "workspace-files"
+  ],
+  "default_skills": [
+    "search"
+  ]
 }

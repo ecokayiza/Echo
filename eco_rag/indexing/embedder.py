@@ -3,10 +3,22 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
-from openai import BadRequestError, OpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    OpenAI,
+    OpenAIError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 
 from ..chat.registry import EmbeddingModelSettings, get_active_embedding_model_settings, normalize_embedding_model_settings
 from ..config import Config
+from .errors import EmbeddingError
 
 DEFAULT_QUERY_INSTRUCTION = "Given a user query, retrieve relevant passages that answer the query."
 MAX_BATCH_SIZE_PATTERN = re.compile(r"batch size is invalid, it should not be larger than (\d+)", re.IGNORECASE)
@@ -29,7 +41,11 @@ class OpenAICompatibleEmbedder:
         if not texts:
             return []
 
-        resolved = normalize_embedding_model_settings(settings) if settings is not None else get_active_embedding_model_settings()
+        try:
+            resolved = normalize_embedding_model_settings(settings) if settings is not None else get_active_embedding_model_settings()
+        except ValueError as exc:
+            raise EmbeddingError(str(exc)) from exc
+
         prepared = [
             _prepare_input_text(text, input_type=input_type, instruction=instruction)
             for text in texts
@@ -38,11 +54,11 @@ class OpenAICompatibleEmbedder:
         if not prepared:
             return []
         if not resolved.api_key:
-            raise ValueError(f"Missing API key. Update '{Config.MODELS_PATH.name}' with a valid embedding model api_key.")
+            raise EmbeddingError(f"Missing API key. Update '{Config.MODELS_PATH.name}' with a valid embedding model api_key.")
         if not resolved.model:
-            raise ValueError(f"Missing embedding model name. Update '{Config.MODELS_PATH.name}' with a valid model.")
+            raise EmbeddingError(f"Missing embedding model name. Update '{Config.MODELS_PATH.name}' with a valid model.")
         if not resolved.base_url:
-            raise ValueError(
+            raise EmbeddingError(
                 f"Missing embedding model base_url. Update '{Config.MODELS_PATH.name}' with a valid OpenAI-compatible endpoint."
             )
 
@@ -51,20 +67,33 @@ class OpenAICompatibleEmbedder:
         if dimensions is not None:
             request_kwargs["dimensions"] = dimensions
         configured_batch_size = _configured_batch_size(resolved)
-        if configured_batch_size is not None and len(prepared) > configured_batch_size:
-            return _embed_in_batches(client, request_kwargs, configured_batch_size, progress_callback=progress_callback)
-
         try:
-            embeddings = _extract_embeddings(client.embeddings.create(**request_kwargs))
-            if progress_callback is not None:
-                progress_callback(len(prepared), len(prepared))
-            return embeddings
-        except BadRequestError as exc:
-            max_batch_size = _extract_max_batch_size(exc)
-            if max_batch_size is None or len(prepared) <= 1:
-                raise
+            if configured_batch_size is not None and len(prepared) > configured_batch_size:
+                return _validate_embeddings(
+                    _embed_in_batches(client, request_kwargs, configured_batch_size, progress_callback=progress_callback),
+                    len(prepared),
+                )
 
-        return _embed_in_batches(client, request_kwargs, max_batch_size, progress_callback=progress_callback)
+            try:
+                embeddings = _extract_embeddings(client.embeddings.create(**request_kwargs))
+                if progress_callback is not None:
+                    progress_callback(len(prepared), len(prepared))
+                return _validate_embeddings(embeddings, len(prepared))
+            except BadRequestError as exc:
+                max_batch_size = _extract_max_batch_size(exc)
+                if max_batch_size is None or len(prepared) <= 1:
+                    raise
+
+            return _validate_embeddings(
+                _embed_in_batches(client, request_kwargs, max_batch_size, progress_callback=progress_callback),
+                len(prepared),
+            )
+        except OpenAIError as exc:
+            raise _embedding_provider_error(exc, resolved) from exc
+        except EmbeddingError:
+            raise
+        except Exception as exc:
+            raise EmbeddingError(f"Unexpected embedding failure: {_short_error(exc)}") from exc
 
     @staticmethod
     def embed_documents(
@@ -110,6 +139,12 @@ def _extract_embeddings(response) -> list[list[float]]:
     return [item.embedding for item in response.data]
 
 
+def _validate_embeddings(embeddings: list[list[float]], expected_count: int) -> list[list[float]]:
+    if len(embeddings) != expected_count:
+        raise EmbeddingError(f"Embedding provider returned {len(embeddings)} vector(s) for {expected_count} input chunk(s).")
+    return embeddings
+
+
 def _embed_in_batches(
     client: OpenAI,
     request_kwargs: dict,
@@ -145,5 +180,29 @@ def _extract_max_batch_size(exc: BadRequestError) -> int | None:
 def _batched(items: list[str], size: int):
     for index in range(0, len(items), size):
         yield items[index : index + size]
+
+
+def _embedding_provider_error(exc: OpenAIError, settings: EmbeddingModelSettings) -> EmbeddingError:
+    provider = f"'{settings.name}' ({settings.model} at {settings.base_url})"
+    if isinstance(exc, AuthenticationError):
+        return EmbeddingError(f"Embedding provider rejected the API key for {provider}.")
+    if isinstance(exc, PermissionDeniedError):
+        return EmbeddingError(f"Embedding provider denied access to {provider}.")
+    if isinstance(exc, NotFoundError):
+        return EmbeddingError(f"Embedding model or endpoint was not found for {provider}.")
+    if isinstance(exc, RateLimitError):
+        return EmbeddingError(f"Embedding provider rate-limited {provider}. Try again later or lower batch_size.")
+    if isinstance(exc, (APIConnectionError, APITimeoutError)):
+        return EmbeddingError(f"Embedding provider is unavailable at {settings.base_url}. Confirm the service is running and reachable.")
+    if isinstance(exc, BadRequestError):
+        return EmbeddingError(f"Embedding request was rejected by {provider}: {_short_error(exc)}")
+    if isinstance(exc, APIStatusError):
+        return EmbeddingError(f"Embedding provider returned HTTP {exc.status_code} for {provider}: {_short_error(exc)}")
+    return EmbeddingError(f"Embedding request failed for {provider}: {_short_error(exc)}")
+
+
+def _short_error(exc: Exception) -> str:
+    message = str(exc).strip().replace("\n", " ")
+    return message[:500] or exc.__class__.__name__
 
 HuggingFaceEmbedder = OpenAICompatibleEmbedder

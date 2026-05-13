@@ -1,8 +1,9 @@
 import unittest
 
 from eco_rag.chat import Response
-from eco_rag.workflow.nodes import _decision_from_response
+from eco_rag.workflow.nodes import _decision_from_response, _parse_retrieve_call
 from eco_rag.workflow import WorkflowService
+from eco_rag.workflow_sections import parse_workflow_sections
 
 
 def _user_query(messages) -> str:
@@ -10,7 +11,7 @@ def _user_query(messages) -> str:
         content = str(item.get("content") or "")
         if item.get("role") != "user":
             continue
-        if content.startswith("[tool]"):
+        if content.startswith("<tool>"):
             continue
         text = " ".join(content.split())
         if text.startswith("/skill "):
@@ -34,35 +35,41 @@ class FakeModel:
         if not continuation:
             if query == "hello there":
                 return Response(
-                    content="[plan]\nThis can be answered directly.\n[answer]\nanswer::hello there",
+                    content="<plan>\nThis can be answered directly.\n</plan>\n<answer>\nanswer::hello there\n</answer>",
                     token_usage={"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                     raw_response=None,
                 )
             if query == "tell me something longer":
                 return Response(
                     content=(
-                        "[plan]\nThis can still be answered directly.\n[answer]\n"
+                        "<plan>\nThis can still be answered directly.\n</plan>\n<answer>\n"
                         "answer::This reply is intentionally long enough to verify that the workflow "
-                        "emits multiple streamed chunks instead of one single final payload."
+                        "emits multiple streamed chunks instead of one single final payload.\n</answer>"
                     ),
                     token_usage={"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                     raw_response=None,
                 )
             if query == "Need the db skill please":
                 return Response(
-                    content="[plan]\nA requested skill should be loaded first.\n[answer]\nshould-not-be-used",
+                    content="<plan>\nA requested skill should be loaded first.\n</plan>\n<answer>\nshould-not-be-used\n</answer>",
                     token_usage={"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                     raw_response=None,
                 )
             if query == "Explain the repo workflow":
                 return Response(
-                    content="[plan]\nNeed repo evidence first.\n[retrieve]\nlegacy_search(\"Explain the repo workflow\")",
+                    content=(
+                        "<plan>\nNeed repo evidence first.\n</plan>\n<retrieve>\n"
+                        "legacy_search(\"Explain the repo workflow\")\n</retrieve>"
+                    ),
                     token_usage={"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                     raw_response=None,
                 )
             if query == "Explain the repo workflow in depth":
                 return Response(
-                    content="[plan]\nNeed an initial retrieval batch.\n[retrieve]\nlegacy_search(\"Explain the repo workflow in depth\")",
+                    content=(
+                        "<plan>\nNeed an initial retrieval batch.\n</plan>\n<retrieve>\n"
+                        "legacy_search(\"Explain the repo workflow in depth\")\n</retrieve>"
+                    ),
                     token_usage={"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
                     raw_response=None,
                 )
@@ -70,31 +77,37 @@ class FakeModel:
         if continuation:
             if query == "Explain the repo workflow":
                 return Response(
-                    content="[think]\nThe evidence is enough.\n[answer]\nanswer::Explain the repo workflow",
+                    content="<think>\nThe evidence is enough.\n</think>\n<answer>\nanswer::Explain the repo workflow\n</answer>",
                     token_usage={"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
                     raw_response=None,
                 )
             if query == "Explain the repo workflow in depth":
                 if "context::Explain the repo workflow in depth followup" not in transcript:
                     return Response(
-                        content="[think]\nOne more pass will tighten the answer.\n[retrieve]\nlegacy_search(\"Explain the repo workflow in depth followup\")",
+                        content=(
+                            "<think>\nOne more pass will tighten the answer.\n</think>\n<retrieve>\n"
+                            "legacy_search(\"Explain the repo workflow in depth followup\")\n</retrieve>"
+                        ),
                         token_usage={"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
                         raw_response=None,
                     )
                 return Response(
-                    content="[think]\nThe evidence is enough.\n[answer]\nanswer::Explain the repo workflow in depth",
+                    content="<think>\nThe evidence is enough.\n</think>\n<answer>\nanswer::Explain the repo workflow in depth\n</answer>",
                     token_usage={"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
                     raw_response=None,
                 )
             if query == "Need the db skill please":
                 if "context::Need the db skill please" not in transcript:
                     return Response(
-                        content="[think]\nThe requested skill is loaded, now search locally.\n[retrieve]\nlegacy_search(\"Need the db skill please\")",
+                        content=(
+                            "<think>\nThe requested skill is loaded, now search locally.\n</think>\n<retrieve>\n"
+                            "legacy_search(\"Need the db skill please\")\n</retrieve>"
+                        ),
                         token_usage={"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
                         raw_response=None,
                     )
                 return Response(
-                    content="[think]\nThe evidence is enough.\n[answer]\nanswer::Need the db skill please",
+                    content="<think>\nThe evidence is enough.\n</think>\n<answer>\nanswer::Need the db skill please\n</answer>",
                     token_usage={"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
                     raw_response=None,
                 )
@@ -120,10 +133,104 @@ def fake_model_factory(_settings=None):
 
 
 class WorkflowTests(unittest.IsolatedAsyncioTestCase):
+    async def test_workflow_sections_parse_inline_blocks(self):
+        sections = parse_workflow_sections("<think>Evidence is enough.</think> <answer>Final reply.</answer>")
+
+        self.assertEqual(sections["think"], "Evidence is enough.")
+        self.assertEqual(sections["answer"], "Final reply.")
+
+    async def test_unmarked_decision_response_is_treated_as_answer(self):
+        decision = _decision_from_response(
+            Response(content="Plain final answer without workflow tags.", token_usage=None, raw_response=None),
+            node="plan",
+            allow_retrieve=True,
+            allowed_tool_names={"legacy_search", "database_search", "web_search", "load_skill"},
+        )
+
+        self.assertEqual(decision["next_step"], "answer")
+        self.assertEqual(decision["answer"], "Plain final answer without workflow tags.")
+
+    async def test_inline_answer_block_does_not_require_node_block(self):
+        decision = _decision_from_response(
+            Response(content="<answer>Final reply from inline XML.</answer>", token_usage=None, raw_response=None),
+            node="think",
+            allow_retrieve=True,
+            allowed_tool_names={"legacy_search", "database_search", "web_search", "load_skill"},
+        )
+
+        self.assertEqual(decision["next_step"], "answer")
+        self.assertEqual(decision["answer"], "Final reply from inline XML.")
+
+    async def test_think_only_response_is_treated_as_answer(self):
+        decision = _decision_from_response(
+            Response(
+                content="<think>\nThe evidence is enough. HFUT is in Hefei, Anhui, China.\n</think>",
+                token_usage=None,
+                raw_response=None,
+            ),
+            node="think",
+            allow_retrieve=True,
+            allowed_tool_names={"legacy_search", "database_search", "web_search", "load_skill"},
+        )
+
+        self.assertEqual(decision["next_step"], "answer")
+        self.assertEqual(decision["answer"], "The evidence is enough. HFUT is in Hefei, Anhui, China.")
+
+    async def test_unclosed_retrieve_with_malformed_provider_close_is_parsed(self):
+        decision = _decision_from_response(
+            Response(
+                content=(
+                    "<think>\nNeed fresh school leadership information.\n</think>\n"
+                    '<retrieve>\nweb_search("合肥工业大学 计算机与信息学院 院长 2024 2025", max_results=5)\n'
+                    "</｜｜DSML｜｜tool_calls>"
+                ),
+                token_usage=None,
+                raw_response=None,
+            ),
+            node="think",
+            allow_retrieve=True,
+            allowed_tool_names={"legacy_search", "database_search", "web_search", "load_skill"},
+        )
+
+        self.assertEqual(decision["next_step"], "retrieve")
+        self.assertEqual(decision["pending_retrieve"]["name"], "web_search")
+        self.assertEqual(decision["pending_retrieve"]["args"]["max_results"], 5)
+
+    async def test_web_fetch_retrieve_command_is_parsed(self):
+        allowed = {"web_fetch"}
+
+        self.assertEqual(
+            _parse_retrieve_call('web_fetch("https://example.com/a")', allowed),
+            {"name": "web_fetch", "args": {"url": "https://example.com/a"}},
+        )
+        self.assertEqual(
+            _parse_retrieve_call('web_fetch(url="https://example.com/a", max_chars=12000)', allowed),
+            {"name": "web_fetch", "args": {"url": "https://example.com/a", "max_chars": 12000}},
+        )
+        with self.assertRaisesRegex(ValueError, "non-empty URL"):
+            _parse_retrieve_call('web_fetch("")', allowed)
+        with self.assertRaisesRegex(ValueError, "http or https"):
+            _parse_retrieve_call('web_fetch("ftp://example.com/a")', allowed)
+
+    async def test_default_skill_load_request_is_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            _decision_from_response(
+                Response(
+                    content="<plan>\nNeed search guidance.\n</plan>\n<retrieve>\nload_skill(\"search\")\n</retrieve>",
+                    token_usage=None,
+                    raw_response=None,
+                ),
+                node="plan",
+                allow_retrieve=True,
+                allowed_tool_names={"legacy_search", "database_search", "web_search", "load_skill"},
+            )
+
+        self.assertIn("Default skill 'search' is already loaded", str(ctx.exception))
+
     async def test_decision_error_includes_raw_llm_output(self):
         with self.assertRaises(ValueError) as ctx:
             _decision_from_response(
-                Response(content="[plan]\nMissing action block.", token_usage=None, raw_response=None),
+                Response(content="<plan>\nMissing action block.\n</plan>", token_usage=None, raw_response=None),
                 node="plan",
                 allow_retrieve=True,
                 allowed_tool_names={"legacy_search", "database_search", "web_search", "load_skill"},
@@ -131,7 +238,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
 
         detail = str(ctx.exception)
         self.assertIn("LLM raw output:", detail)
-        self.assertIn("[plan]\nMissing action block.", detail)
+        self.assertIn("<plan>\nMissing action block.\n</plan>", detail)
 
     async def test_workflow_reuses_one_model_instance_per_run(self):
         created_models: list[FakeModel] = []
@@ -188,7 +295,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
             async def generate_response(self, messages, tools=None, stop=None, callbacks=None, **kwargs):
                 self.calls.append([{"role": item["role"], "content": item["content"]} for item in messages])
                 return Response(
-                    content="[plan]\nThis can be answered directly.\n[answer]\nanswer::inferred",
+                    content="<plan>\nThis can be answered directly.\n</plan>\n<answer>\nanswer::inferred\n</answer>",
                     token_usage={"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
                     raw_response=None,
                 )
@@ -230,14 +337,14 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(records[1]["tool_name"], "legacy_search")
         self.assertEqual({record["workflow_turn_id"] for record in records}, {snapshot["workflow_turn_id"]})
         second_call = created_models[0].calls[1]
-        self.assertIn("[plan]", str(second_call[2]["content"]))
-        self.assertTrue(any(str(item["content"]).startswith("[tool]") for item in second_call))
+        self.assertIn("<plan>", str(second_call[2]["content"]))
+        self.assertTrue(any(str(item["content"]).startswith("<tool>") for item in second_call))
         self.assertEqual(second_call[2]["role"], "assistant")
         self.assertIn("tool_calls", second_call[2])
         assistant_tool_call = second_call[2]["tool_calls"][0]
         self.assertEqual(assistant_tool_call["function"]["name"], "legacy_search")
         self.assertEqual(second_call[-1]["role"], "tool")
-        self.assertTrue(str(second_call[-1]["content"]).startswith("[tool]"))
+        self.assertTrue(str(second_call[-1]["content"]).startswith("<tool>"))
         self.assertEqual(second_call[-1]["tool_call_id"], assistant_tool_call["id"])
 
     async def test_multi_hop_workflow_keeps_retrieving_until_answer(self):
@@ -261,7 +368,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([record["message_type"] for record in records], ["plan", "tool", "think", "tool", "think"])
         third_call = created_models[0].calls[2]
         self.assertTrue(any("context::Explain the repo workflow in depth" in item["content"] for item in third_call))
-        self.assertTrue(any("[think]" in item["content"] for item in third_call))
+        self.assertTrue(any("<think>" in item["content"] for item in third_call))
 
     async def test_requested_skill_forces_initial_load_skill(self):
         async def tool_runner(query: str):

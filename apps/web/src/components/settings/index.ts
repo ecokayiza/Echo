@@ -1,0 +1,1 @@
+export { ManagementSettingsPage } from "./ManagementSettingsPage";

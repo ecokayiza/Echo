@@ -1,0 +1,185 @@
+.session-list {
+  display: grid;
+  gap: 0.24rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  min-height: 0;
+  overflow: auto;
+}
+
+.session-list__item {
+  min-width: 0;
+}
+
+.session-item {
+  position: relative;
+}
+
+.session-card {
+  width: 100%;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.52rem 1.65rem 0.52rem 0.64rem;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease;
+}
+
+.session-card:hover {
+  background: var(--panel-soft);
+  border-color: var(--border);
+}
+
+.session-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.session-card--active {
+  background: var(--accent-soft);
+  border-color: #c7dafc;
+}
+
+.session-card__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.session-card__title {
+  min-width: 0;
+  font-weight: 650;
+  font-size: 0.92rem;
+}
+
+.session-card__preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  font-size: 0.82rem;
+}
+
+.session-card__input {
+  min-width: 0;
+  padding: 0.18rem 0.4rem;
+  font-size: 0.9rem;
+  font-weight: 650;
+  border-radius: var(--radius-sm);
+}
+
+.session-card__meta {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.08rem;
+  margin-left: auto;
+}
+
+.session-action__button {
+  width: 1.15rem;
+  height: 1.15rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #7b8394;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease;
+}
+
+.session-action__button > svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.session-item:hover .session-action__button,
+.session-item:focus-within .session-action__button,
+.session-card__input:focus-visible + .session-actions .session-action__button,
+.session-action__button:focus-visible {
+  opacity: 0.88;
+  pointer-events: auto;
+}
+
+.session-action__button:hover,
+.session-action__button:focus-visible {
+  color: #2f3746;
+}
+
+.session-action__button--danger:hover,
+.session-action__button--danger:focus-visible {
+  color: var(--danger);
+}
+
+
+.model-overview {
+  display: grid;
+  gap: 0.18rem;
+  padding: 0.68rem 0.76rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--panel-soft);
+}
+
+.model-overview__value {
+  font-weight: 700;
+}
+
+.model-settings-button {
+  width: 1.8rem;
+  height: 1.8rem;
+  margin-top: -0.25rem;
+  margin-right: -0.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-soft);
+  color: var(--muted);
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.model-settings-button > svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  display: block;
+}
+
+.model-settings-button:hover,
+.model-settings-button:focus-visible {
+  color: var(--text);
+  background: #fff;
+  border-color: var(--border-strong);
+}
+
+.section-card__actions .model-settings-button {
+  margin-right: 0;
+}
+
+.section-card__actions .model-settings-button:last-child {
+  margin-right: -0.25rem;
+}
+
