@@ -1081,7 +1081,7 @@ export function useChatWorkspace() {
           dispatch({ type: "messages:set", messages: stableMessages });
           dispatch({
             type: "workflow:set",
-            workflow: buildFailedWorkflow(pendingWorkflow, detail),
+            workflow: buildFailedWorkflow(currentWorkflow, detail),
           });
         });
         dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });
@@ -1202,7 +1202,7 @@ export function useChatWorkspace() {
           dispatch({ type: "messages:set", messages: state.messages });
           dispatch({
             type: "workflow:set",
-            workflow: buildFailedWorkflow(pendingWorkflow, detail),
+            workflow: buildFailedWorkflow(currentWorkflow, detail),
           });
         });
         dispatch({ type: "status", text: detail, tone: "error", liveLabel: "Error" });

@@ -41,6 +41,7 @@ export function WorkflowPanel({ workflow }: WorkflowPanelProps) {
 }
 
 function buildWorkflowLogEntries(workflow: WorkflowSnapshot) {
+  const errorMessages = new Set(workflow.errors.map((error) => formatWorkflowLogMessage(error)));
   const stepEntries = workflow.node_statuses
     .filter((node) => node.detail)
     .map((node) => ({
@@ -58,7 +59,8 @@ function buildWorkflowLogEntries(workflow: WorkflowSnapshot) {
     .map((entry) => ({
       label: entry.node || entry.level || "log",
       message: formatWorkflowLogMessage(entry.message),
-    }));
+    }))
+    .filter((entry) => !errorMessages.has(entry.message));
 
   const seen = new Set<string>();
   return [...stepEntries, ...errorEntries, ...extraEntries].filter((entry) => {

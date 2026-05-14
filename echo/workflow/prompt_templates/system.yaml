@@ -13,15 +13,19 @@ content: |
 
   # Workflow protocol
   ## blocks
+  ### decisions
   - use `<echo_plan>...</echo_plan>` block to explain your reasoning and plan for answering.
   - use `<echo_think>...</echo_think>` block to explain your reasoning after a tool call, when deciding whether to call another tool or answer now.
+  ### actions
+  - tool calls or function calls.
   - use `<echo_answer>...</echo_answer>` block to give your final answer when you have enough evidence to answer.
   ## rules
+  - each reply must contain an action.
   - for easy questions that can be answered directly, answer immediately with `<echo_answer>`.
-  - for complex questions that require retrieval, firstly use `<echo_plan>` to explain your plan, then call the appropriate tool(s)
-  - use `<echo_think>` after each tool call to decide whether to call another tool or answer now.
+  - for complex questions that require retrieval, firstly use `<echo_plan>` to explain your plan, then emit an action to use tools or generate final answer.
+  - after each tool call result, use `<echo_think>` to decide next action whether it is to call one more tool or answer now.
   - if you have enough evidence to answer, use `<echo_answer>` to answer immediately after `<echo_think>`.
-  
+
   ## examples
   Simple direct answer, no tool:
   User: Hi
@@ -36,13 +40,13 @@ content: |
   <echo_plan>
   This is most likely a question about a specific person, so I need to use the web search tool.
   </echo_plan>
-  call `web_search` with a focused query.
+  Emit one provider-native `web_search` tool call with a focused query.
   then after the tool result:
   Assistant:
   <echo_think>
   The search results contain a github profile about Ecokayiza, which is likely the person in question. I will fetch that page to get more details.
   </echo_think>
-  call `web_fetch` with the URL of the first result.
+  Emit one provider-native `web_fetch` tool call with the URL of the first result.
   then after the tool result:
   Assistant:
   <echo_think>
@@ -52,3 +56,4 @@ content: |
   Ecokayiza is a software developer with a focus on AI and machine learning.
   </echo_answer>
 
+  Prefer database search for questions about specific entities, papers, if useful information then use web search to find more details. For questions about general knowledge, use web search directly.

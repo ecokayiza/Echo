@@ -45,12 +45,16 @@ export function buildPendingWorkflow(meta: MetaResponse | null, query: string): 
 }
 
 export function buildFailedWorkflow(workflow: WorkflowSnapshot, detail: string): WorkflowSnapshot {
+  const errors = workflow.errors.includes(detail) ? workflow.errors : [...workflow.errors, detail];
+  const hasLog = workflow.logs.some((entry) => entry.level === "error" && entry.message === detail);
+  const logs = hasLog ? workflow.logs : [...workflow.logs, { level: "error", node: workflow.active_node, message: detail }];
+
   return {
     ...workflow,
     status: "failed",
     active_node: null,
-    logs: [...workflow.logs, { level: "error", node: workflow.active_node, message: detail }],
-    errors: [detail],
+    logs,
+    errors,
     node_statuses: workflow.node_statuses.map((node) => {
       if (node.node === workflow.active_node) {
         return { ...node, status: "failed", detail };

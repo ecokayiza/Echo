@@ -442,8 +442,9 @@ async def _stream_decision_response(
             native_tool_calls.clear()
             native_tool_calls.extend(dict(item) for item in payload if isinstance(item, dict))
 
+    workflow_messages = _workflow_messages(state)
     async for chunk in deps.model.stream_response(
-        _workflow_messages(state),
+        workflow_messages,
         tools=deps.tool_client.tool_schemas,
         callbacks={"on_usage": on_usage, "on_tool_calls": on_tool_calls},
     ):
@@ -468,22 +469,58 @@ async def _stream_decision_response(
                 streamed_answer=streamed_answer,
             )
 
+    if not content.strip() and not native_tool_calls:
+        response = await deps.model.generate_response(
+            workflow_messages,
+            tools=deps.tool_client.tool_schemas,
+        )
+        content = (response.content or "").strip()
+        native_tool_calls.clear()
+        native_tool_calls.extend(response.tool_calls or [])
+        if response.token_usage:
+            usage.clear()
+            usage.update(response.token_usage)
+
+    if _needs_decision_repair(node, content, native_tool_calls):
+        response = await deps.model.generate_response(
+            _decision_repair_messages(workflow_messages, node),
+            tools=deps.tool_client.tool_schemas,
+        )
+        content = (response.content or "").strip()
+        native_tool_calls.clear()
+        native_tool_calls.extend(response.tool_calls or [])
+        if response.token_usage:
+            usage.clear()
+            usage.update(response.token_usage)
+
+    selected_tool_calls = _select_native_tool_calls(native_tool_calls, deps.tool_client.tool_names)
+    if node == WorkflowStep.THINK.value and _needs_decision_repair(node, content, selected_tool_calls):
+        response = await deps.model.generate_response(
+            _answer_repair_messages(workflow_messages),
+            tools=None,
+        )
+        content = _coerce_answer_content(response.content, state)
+        selected_tool_calls = []
+        if response.token_usage:
+            usage.clear()
+            usage.update(response.token_usage)
+
     final_content = _sanitize_decision_content(
-        _with_native_tool_call_content(node, content.strip(), native_tool_calls)
+        _with_native_tool_call_content(node, content.strip(), selected_tool_calls)
     )
     if not final_content:
-        raise ValueError(f"{node.title()} node returned an empty response.")
+        raise ValueError(_empty_decision_message(node))
 
     record = {
         "id": record_id,
         "role": "assistant",
         "content": final_content,
-        "message_type": _record_message_type(node, final_content, native_tool_calls),
+        "message_type": _record_message_type(node, final_content, selected_tool_calls),
         "workflow_turn_id": state["workflow_turn_id"],
         "token_usage": usage or None,
         "persist": True,
     }
-    provider_tool_calls = _provider_tool_calls(native_tool_calls)
+    provider_tool_calls = _provider_tool_calls(selected_tool_calls)
     if provider_tool_calls:
         record["tool_calls"] = provider_tool_calls
     _emit_record(record)
@@ -496,7 +533,7 @@ async def _stream_decision_response(
     return (
         Response(
             content=final_content,
-            tool_calls=native_tool_calls or None,
+            tool_calls=selected_tool_calls or None,
             token_usage=usage or None,
             raw_response=None,
         ),
@@ -576,6 +613,115 @@ def _with_llm_raw_output(detail: str, content: str | None, *, limit: int = 2000)
     return f"{detail}\nLLM raw output:\n{rendered}"
 
 
+def _needs_decision_repair(node: str, content: str, tool_calls: list[dict[str, Any]]) -> bool:
+    """Return whether a decision has no executable action and should be repaired."""
+    if tool_calls:
+        return False
+
+    text = content.strip()
+    if not text:
+        return True
+
+    sections = _sections(text, allow_unclosed=True)
+    if _has_action_block(sections, "answer"):
+        return False
+    if TEXTUAL_RETRIEVE_PATTERN.search(text):
+        return False
+
+    entries = workflow_section_entries(text, allow_unclosed=True)
+    if not entries:
+        return True
+
+    return all(name == node for name, _block in entries)
+
+
+def _decision_repair_messages(messages: list[dict[str, Any]], node: str) -> list[dict[str, Any]]:
+    """Append a corrective instruction for models that emitted thought without an action."""
+    label = "think" if node == WorkflowStep.THINK.value else "plan"
+    return [
+        *messages,
+        {
+            "role": "user",
+            "content": (
+                "__echo_workflow_repair__\n"
+                f"Your previous {label} decision had no executable next step. Continue the workflow now. "
+                "Output exactly one of these: a tool call, or an <echo_answer>...</echo_answer> block. "
+                "Do not write prose-only intent such as 'I should search' or 'I should fetch'."
+            ),
+        },
+    ]
+
+
+def _answer_repair_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Append a final-answer-only recovery instruction after repeated empty think decisions."""
+    return [
+        *_plain_answer_repair_messages(messages),
+        {
+            "role": "user",
+            "content": (
+                "__echo_workflow_answer_repair__\n"
+                "The previous think decision was empty or incomplete twice. Tools are disabled for this recovery. "
+                "Using only the transcript and retrieved tool results above, produce the final answer now in one "
+                "<echo_answer>...</echo_answer> block."
+            ),
+        },
+    ]
+
+
+def _plain_answer_repair_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten native tool-call transcript details for a no-tools answer recovery call."""
+    repaired: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role") or "user").strip()
+        content = message.get("content")
+        if role == "tool":
+            repaired.append({"role": "user", "content": f"Tool result:\n{content}"})
+            continue
+        if role not in {"system", "developer", "user", "assistant"}:
+            role = "user"
+        repaired.append({"role": role, "content": content})
+    return repaired
+
+
+def _coerce_answer_content(content: str | None, state: WorkflowState) -> str:
+    """Turn answer-recovery output into a valid answer block, with a deterministic last resort."""
+    text = str(content or "").strip()
+    entries = workflow_section_entries(text, allow_unclosed=True)
+    if text and _has_action_block(_sections(text, allow_unclosed=True), "answer"):
+        return text
+    if text and not entries and not TEXTUAL_RETRIEVE_PATTERN.search(text):
+        return render_workflow_section("answer", text)
+
+    fallback = _fallback_answer_from_latest_tool(state)
+    return render_workflow_section("answer", fallback)
+
+
+def _fallback_answer_from_latest_tool(state: WorkflowState, *, limit: int = 4000) -> str:
+    """Build a conservative final answer from the latest tool result if the model stays empty."""
+    memory = state.get("workflow_memory")
+    if isinstance(memory, list):
+        for item in reversed(memory):
+            if not isinstance(item, dict) or item.get("role") != "tool":
+                continue
+            content = str(item.get("content") or "").strip()
+            tool_block = _sections(content, allow_unclosed=True).get("tool") or content
+            tool_block = tool_block.strip()
+            if tool_block:
+                if len(tool_block) > limit:
+                    tool_block = f"{tool_block[:limit].rstrip()}\n...(truncated)"
+                return f"Retrieved context:\n\n{tool_block}"
+    return "I retrieved context, but the model did not produce a final synthesis."
+
+
+def _empty_decision_message(node: str) -> str:
+    if node == WorkflowStep.THINK.value:
+        return (
+            "Think node returned no action. Empty <echo_think> is allowed only when the response "
+            "also includes <echo_answer> or exactly one provider-native tool call."
+        )
+    return f"{node.title()} node returned an empty response."
+
+
 def _with_native_tool_call_content(node: str, content: str, tool_calls: list[dict[str, Any]]) -> str:
     """Ensure native tool-call decisions still have a visible node record."""
     if not tool_calls:
@@ -591,6 +737,20 @@ def _with_native_tool_call_content(node: str, content: str, tool_calls: list[dic
         return render_workflow_section(node, node_block)
 
     return render_workflow_section(node, f"Native tool call: {first['name']}")
+
+
+def _select_native_tool_calls(tool_calls: list[dict[str, Any]], allowed_tool_names: set[str]) -> list[dict[str, Any]]:
+    """Keep one executable native tool call for Echo's single-tool workflow step."""
+    named = [
+        dict(item)
+        for item in tool_calls
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    if len(named) <= 1:
+        return named
+
+    allowed = [item for item in named if str(item.get("name") or "").strip() in allowed_tool_names]
+    return [allowed[0] if allowed else named[0]]
 
 
 def _record_message_type(node: str, content: str, tool_calls: list[dict[str, Any]]) -> str:

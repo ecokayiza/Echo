@@ -13,6 +13,7 @@ from .nodes import WorkflowDependencies
 from .prompts import default_system_prompt
 from .state import WorkflowState, WorkflowStep, new_state
 from .tracker import WorkflowTracker
+from ..workflow_sections import workflow_section_entries
 
 
 class WorkflowService:
@@ -126,6 +127,7 @@ class WorkflowService:
             runtime_tracker = tracker or WorkflowTracker(state["workflow_turn_id"], state["query"])
             current_state = dict(state)
             buffered_records = [dict(item) for item in records]
+            latest_record: dict[str, Any] | None = None
             yield {"event": "state", "data": runtime_tracker.snapshot(current_state)}
 
             try:
@@ -141,6 +143,7 @@ class WorkflowService:
                         elif payload.get("event") == "record" and isinstance(payload.get("data"), dict):
                             record = dict(payload["data"])
                             persist = bool(record.pop("persist", True))
+                            latest_record = dict(record)
                             if persist:
                                 buffered_records.append(dict(record))
                             yield {"event": "record", "data": record}
@@ -184,6 +187,14 @@ class WorkflowService:
                     },
                 }
             except Exception as exc:
+                thought_log = _latest_error_thought(
+                    current_state,
+                    buffered_records,
+                    latest_record,
+                    active_node=runtime_tracker.active_node,
+                )
+                if thought_log:
+                    runtime_tracker.log(thought_log, node="thought", level="error")
                 runtime_tracker.fail(str(exc), node=runtime_tracker.active_node)
                 self._persist_draft(draft_session_id, draft_user_message_id, current_state, runtime_tracker, buffered_records)
                 yield {"event": "state", "data": runtime_tracker.snapshot(current_state)}
@@ -285,3 +296,57 @@ def _route_detail(next_step: Any) -> str:
     if step == WorkflowStep.ANSWER.value:
         return "Answer is ready."
     return "Decision completed."
+
+
+def _latest_error_thought(
+    state: dict[str, Any],
+    records: list[dict[str, Any]],
+    latest_record: dict[str, Any] | None,
+    *,
+    active_node: str | None = None,
+) -> str | None:
+    """Find the latest assistant reasoning visible enough to explain a workflow error."""
+    candidates: list[dict[str, Any]] = []
+    if isinstance(latest_record, dict):
+        candidates.append(latest_record)
+    candidates.extend(dict(record) for record in reversed(records) if isinstance(record, dict))
+    memory = state.get("workflow_memory")
+    if isinstance(memory, list):
+        candidates.extend(dict(item) for item in reversed(memory) if isinstance(item, dict))
+
+    for item in candidates:
+        rendered = _thought_log_from_record(item, active_node=active_node)
+        if rendered:
+            return rendered
+    return None
+
+
+def _thought_log_from_record(record: dict[str, Any], *, active_node: str | None = None) -> str | None:
+    """Render one compact thought log entry from a workflow record."""
+    if str(record.get("role") or "").strip() != "assistant":
+        return None
+
+    content = str(record.get("content") or "").strip()
+    if not content:
+        return None
+
+    entries = workflow_section_entries(content, allow_unclosed=True)
+    if entries and all(name in {"think", "plan"} and not block for name, block in entries):
+        return None
+    for name, block in reversed(entries):
+        if name in {"think", "plan"} and block:
+            if active_node == WorkflowStep.THINK.value and name == WorkflowStep.PLAN.value:
+                return f"No think output was emitted before error. Latest plan: {_compact_log_text(block)}"
+            return f"Latest {name} before error: {_compact_log_text(block)}"
+    for name, block in reversed(entries):
+        if name == "answer" and block:
+            return f"Latest answer draft before error: {_compact_log_text(block)}"
+    return f"Latest assistant output before error: {_compact_log_text(content)}"
+
+
+def _compact_log_text(value: str, *, limit: int = 900) -> str:
+    """Keep workflow log context readable inside the side panel."""
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit].rstrip()}..."

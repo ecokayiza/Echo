@@ -269,13 +269,16 @@ def extract_response_tool_calls(raw_response: Any) -> Optional[List[Dict[str, An
     for item in output if isinstance(output, list) else []:
         if _field(item, "type") != "function_call":
             continue
+        arguments = _field(item, "arguments")
         name = _field(item, "name")
         if not name:
+            if not str(arguments or "").strip():
+                continue
             raise ValueError(f"Responses API tool call is missing a function name: {item!r}")
         normalized.append(
             {
                 "name": str(name),
-                "args": _tool_call_arguments(_field(item, "arguments")),
+                "args": _tool_call_arguments(arguments),
                 "id": str(_field(item, "call_id") or _field(item, "id") or uuid4()),
                 "type": "tool_call",
             }
@@ -292,6 +295,12 @@ def _merge_response_tool_call_event(collected: dict[int, dict[str, Any]], event:
         "response.function_call_arguments.done",
         "response.output_item.done",
     }:
+        return
+
+    item = _field(event, "item")
+    if item is not None and _field(item, "type") != "function_call":
+        return
+    if item is None and event_type.startswith("response.output_item."):
         return
 
     index = _field(event, "output_index")
@@ -313,9 +322,6 @@ def _merge_response_tool_call_event(collected: dict[int, dict[str, Any]], event:
             index = len(collected)
     current = collected.setdefault(index, {"type": "function_call", "arguments": ""})
 
-    item = _field(event, "item")
-    if item is not None and _field(item, "type") != "function_call":
-        return
     if item is not None:
         for key in ("id", "call_id", "name"):
             value = _field(item, key)
@@ -339,7 +345,10 @@ def _response_stream_tool_calls(collected: dict[int, dict[str, Any]]) -> Optiona
     """Normalize accumulated Responses API function calls."""
     if not collected:
         return None
-    return extract_response_tool_calls({"output": [collected[index] for index in sorted(collected)]})
+    completed_items = [collected[index] for index in sorted(collected) if _field(collected[index], "name")]
+    if not completed_items:
+        return None
+    return extract_response_tool_calls({"output": completed_items})
 
 
 def _responses_content(value: Any, *, role: str = "user") -> Any:
@@ -467,6 +476,16 @@ def _response_output_text(response: Any) -> str:
             if text:
                 parts.append(str(text))
     return "".join(parts)
+
+
+def _remaining_response_text(streamed_text: str, completed_text: Any) -> str:
+    """Return only the part of a finalized Responses text event not already streamed."""
+    text = str(completed_text or "")
+    if not text:
+        return ""
+    if not streamed_text:
+        return text
+    return text[len(streamed_text) :] if text.startswith(streamed_text) else ""
 
 
 def _response_event_error(event: Any) -> str:
@@ -790,6 +809,7 @@ class OpenAIChatModel(BaseChatModel):
         on_tool_calls = callback_map.get("on_tool_calls")
         streamed_tool_calls: dict[int, dict[str, Any]] = {}
         completed_tool_calls: list[dict[str, Any]] | None = None
+        streamed_text = ""
         response = await self._create_response(
             messages=messages,
             tools=tools,
@@ -803,7 +823,23 @@ class OpenAIChatModel(BaseChatModel):
             if event_type == "response.output_text.delta":
                 text = _field(event, "delta")
                 if text:
-                    yield str(text)
+                    delta = str(text)
+                    streamed_text = f"{streamed_text}{delta}"
+                    yield delta
+                continue
+            if event_type == "response.output_text.done":
+                delta = _remaining_response_text(streamed_text, _field(event, "text"))
+                if delta:
+                    streamed_text = f"{streamed_text}{delta}"
+                    yield delta
+                continue
+            if event_type == "response.content_part.done":
+                part = _field(event, "part")
+                if _field(part, "type") == "output_text":
+                    delta = _remaining_response_text(streamed_text, _field(part, "text"))
+                    if delta:
+                        streamed_text = f"{streamed_text}{delta}"
+                        yield delta
                 continue
             if event_type == "response.completed":
                 completed_response = _field(event, "response")
@@ -811,6 +847,10 @@ class OpenAIChatModel(BaseChatModel):
                 if usage and callable(on_usage):
                     on_usage(usage)
                 completed_tool_calls = extract_response_tool_calls(completed_response)
+                delta = _remaining_response_text(streamed_text, _response_output_text(completed_response))
+                if delta:
+                    streamed_text = f"{streamed_text}{delta}"
+                    yield delta
                 continue
             if event_type in {"response.failed", "response.incomplete", "response.error"}:
                 raise ValueError(_response_event_error(event))
