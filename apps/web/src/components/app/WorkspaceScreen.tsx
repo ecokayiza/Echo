@@ -20,19 +20,21 @@ interface WorkspaceScreenProps {
 export function WorkspaceScreen({ app }: WorkspaceScreenProps) {
   const { database, dialogs, messages, refs, sessions, settings, workspace } = app;
   const { activeSession, state } = workspace;
-  const sessionsSlot = (
+  const sessionsSlot = ({ openChat }: { openChat: () => void }) => (
     <SessionPanel
       activeSessionId={sessions.activeSessionId}
       busy={state.busy}
-      onCreate={() => {
-        void sessions.actions.create();
+      onCreate={async () => {
+        await sessions.actions.create();
+        openChat();
       }}
       onDelete={sessions.actions.openDeleteDialog}
       onRename={(session, title) => {
         void sessions.actions.rename(session, title);
       }}
-      onSelect={(sessionId) => {
-        void sessions.actions.select(sessionId);
+      onSelect={async (sessionId) => {
+        await sessions.actions.select(sessionId);
+        openChat();
       }}
       ready={state.ready}
       sessions={sessions.sessions}
@@ -107,6 +109,8 @@ export function WorkspaceScreen({ app }: WorkspaceScreenProps) {
   return (
     <>
       <ResponsiveWorkspaceShell
+        activeSessionId={sessions.activeSessionId}
+        chatOpenRequest={state.chatOpenRequest}
         chat={chatSlot}
         database={databaseSlot}
         sessions={sessionsSlot}

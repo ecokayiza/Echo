@@ -203,6 +203,8 @@ class Sessions:
             payload["tool_call_id"] = message.tool_call_id
         if message.tool_calls:
             payload["tool_calls"] = message.tool_calls
+        if message.attachments:
+            payload["attachments"] = message.attachments
         usage = Sessions._usage_dict(message.token_usage)
         if usage:
             payload["token_usage"] = usage
@@ -280,6 +282,7 @@ class Messages:
         tool_name: str | None = None,
         tool_call_id: str | None = None,
         tool_calls: list[dict[str, Any]] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
         token_usage: dict[str, Any] | None = None,
     ) -> Message:
         session = self.sessions.get()
@@ -291,6 +294,7 @@ class Messages:
             tool_name=tool_name,
             tool_call_id=tool_call_id,
             tool_calls=tool_calls,
+            attachments=attachments,
             token_usage=token_usage,
         )
         session["messages"].append(message)

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import re
 from dataclasses import dataclass
 from typing import Any
+from uuid import uuid4
 
 from langgraph.config import get_stream_writer
 
+from echo.settings import Config
 from ..chat.chat_model import BaseChatModel, Response
 from mcp_server.client import ToolClient
 from ..workflow_sections import (
@@ -80,20 +84,23 @@ async def tool_node(state: WorkflowState, deps: WorkflowDependencies) -> Workflo
     tool_name = str(pending_retrieve.get("name") or "").strip()
     tool_args = dict(pending_retrieve.get("args") or {})
     result = await _run_tool(deps.tool_client, tool_name, tool_args)
+    result = _persist_tool_artifacts(tool_name, result, state["workflow_turn_id"], state["retrieve_round"] + 1)
     tool_content = _format_tool_message(tool_name, tool_args, result)
     tool_call_id = _optional_text(pending_retrieve.get("tool_call_id"))
 
-    _emit_record(
-        {
-            "id": _record_id(state, WorkflowStep.TOOL.value, suffix=str(state["retrieve_round"] + 1)),
-            "role": "tool",
-            "content": tool_content,
-            "message_type": WorkflowStep.TOOL.value,
-            "workflow_turn_id": state["workflow_turn_id"],
-            "tool_name": tool_name,
-            "tool_call_id": tool_call_id,
-        }
-    )
+    record = {
+        "id": _record_id(state, WorkflowStep.TOOL.value, suffix=str(state["retrieve_round"] + 1)),
+        "role": "tool",
+        "content": tool_content,
+        "message_type": WorkflowStep.TOOL.value,
+        "workflow_turn_id": state["workflow_turn_id"],
+        "tool_name": tool_name,
+        "tool_call_id": tool_call_id,
+    }
+    attachments = _tool_attachments(result)
+    if attachments:
+        record["attachments"] = attachments
+    _emit_record(record)
 
     next_round = state["retrieve_round"] + 1
     tool_memory = {
@@ -264,21 +271,124 @@ def _visual_memory_items(tool_name: str, result: dict[str, Any]) -> list[dict[st
         image_url = str(item.get("image_url") or "").strip()
         if not image_url:
             continue
-        title = _optional_text(item.get("title")) or "web_fetch screenshot"
-        url = _optional_text(item.get("url"))
-        text = f"Screenshot from web_fetch: {title}"
-        if url:
-            text = f"{text}\nURL: {url}"
         messages.append(
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": text},
                     {"type": "image_url", "image_url": {"url": image_url}},
                 ],
             }
         )
     return messages
+
+
+def _persist_tool_artifacts(
+    tool_name: str,
+    result: dict[str, Any],
+    workflow_turn_id: str,
+    round_number: int,
+) -> dict[str, Any]:
+    """Persist transient tool images as chat artifacts for later UI display."""
+    if tool_name != "web_fetch" or not isinstance(result, dict):
+        return result
+    items = result.get("items")
+    if not isinstance(items, list):
+        return result
+
+    next_items = []
+    changed = False
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            next_items.append(item)
+            continue
+        next_item = dict(item)
+        attachment = _persist_data_url_attachment(
+            str(next_item.get("image_url") or ""),
+            workflow_turn_id=workflow_turn_id,
+            round_number=round_number,
+            item_number=index,
+            title=_optional_text(next_item.get("title")),
+            source_url=_optional_text(next_item.get("url")),
+        )
+        if attachment:
+            existing = next_item.get("attachments")
+            attachments = [dict(entry) for entry in existing if isinstance(entry, dict)] if isinstance(existing, list) else []
+            attachments.append(attachment)
+            next_item["attachments"] = attachments
+            changed = True
+        next_items.append(next_item)
+
+    if not changed:
+        return result
+    return {**result, "items": next_items}
+
+
+def _persist_data_url_attachment(
+    image_url: str,
+    *,
+    workflow_turn_id: str,
+    round_number: int,
+    item_number: int,
+    title: str | None,
+    source_url: str | None,
+) -> dict[str, Any] | None:
+    match = re.match(r"^data:(image/[A-Za-z0-9.+-]+);base64,(.+)$", image_url.strip(), flags=re.DOTALL)
+    if not match:
+        return None
+
+    mime_type = match.group(1).lower()
+    extension = {
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }.get(mime_type)
+    if extension is None:
+        return None
+
+    try:
+        data = base64.b64decode(match.group(2), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not data:
+        return None
+
+    turn_dir_name = _artifact_path_segment(workflow_turn_id) or "workflow"
+    artifact_dir = Config.CHAT_ARTIFACTS_DIR / turn_dir_name
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"web_fetch-{round_number}-{item_number}-{uuid4().hex[:10]}.{extension}"
+    path = artifact_dir / filename
+    path.write_bytes(data)
+
+    relative_path = path.relative_to(Config.CHAT_ARTIFACTS_DIR).as_posix()
+    return {
+        "id": uuid4().hex,
+        "type": "image",
+        "kind": "web_fetch_screenshot",
+        "mime_type": mime_type,
+        "url": f"/api/artifacts/{relative_path}",
+        "path": relative_path,
+        "title": title or "web_fetch screenshot",
+        "source_url": source_url,
+        "size_bytes": len(data),
+    }
+
+
+def _artifact_path_segment(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "")).strip("._-")
+
+
+def _tool_attachments(result: dict[str, Any]) -> list[dict[str, Any]]:
+    items = result.get("items") if isinstance(result, dict) else None
+    if not isinstance(items, list):
+        return []
+    attachments: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("attachments"), list):
+            continue
+        attachments.extend(dict(entry) for entry in item["attachments"] if isinstance(entry, dict))
+    return attachments
 
 
 def _decision_from_response(
@@ -400,8 +510,6 @@ def _format_tool_message(tool_name: str, tool_args: dict[str, Any], result: dict
             line = f"{line}\nURL: {item['url']}"
         if content:
             line = f"{line}\n{content}"
-        if item.get("image_url"):
-            line = f"{line}\nScreenshot: attached for vision model."
         fetch_error = _optional_text(item.get("fetch_error"))
         if fetch_error:
             line = f"{line}\nHTML fetch failed: {fetch_error}"

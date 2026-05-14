@@ -8,6 +8,10 @@
   overflow: auto;
 }
 
+.session-new-button {
+  white-space: nowrap;
+}
+
 .session-list__item {
   min-width: 0;
 }
@@ -127,6 +131,20 @@
 .session-action__button--danger:hover,
 .session-action__button--danger:focus-visible {
   color: var(--danger);
+}
+
+@media (hover: none), (pointer: coarse) {
+  .session-new-button {
+    min-height: 2.75rem;
+    padding-inline: 1rem;
+  }
+
+  .session-action__button {
+    width: 1.55rem;
+    height: 1.55rem;
+    opacity: 0.88;
+    pointer-events: auto;
+  }
 }
 
 

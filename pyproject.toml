@@ -8,6 +8,10 @@ version = "0.1.0"
 description = "Reusable RAG core with FastAPI, React, and Tauri app scaffolds."
 readme = "readme.md"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+]
 dependencies = [
     "chromadb",
     "fastapi",

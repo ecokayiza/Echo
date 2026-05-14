@@ -14,8 +14,8 @@ content: |
   # Workflow protocol
   ## blocks
   ### decisions
-  - use `<echo_plan>...</echo_plan>` block to explain your reasoning and plan for answering.
-  - use `<echo_think>...</echo_think>` block to explain your reasoning after a tool call, when deciding whether to call another tool or answer now.
+  - use `<echo_plan>...</echo_plan>` block to explain your reasoning and plan for answering, if question is complex, you can also make a plan list..
+  - use `<echo_think>...</echo_think>` block to explain your reasoning after a tool call, if plan list exists, update it, then decide whether to call another tool or answer now.
   ### actions
   - tool calls or function calls.
   - use `<echo_answer>...</echo_answer>` block to give your final answer when you have enough evidence to answer.

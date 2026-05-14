@@ -19,6 +19,18 @@ export interface SessionSummary {
 
 export type MessageRole = "system" | "user" | "assistant" | "tool";
 
+export interface MessageAttachment {
+  id?: string;
+  type: "image" | string;
+  kind?: string | null;
+  mime_type?: string | null;
+  url: string;
+  path?: string | null;
+  title?: string | null;
+  source_url?: string | null;
+  size_bytes?: number | null;
+}
+
 export interface MessageRecord {
   id: string;
   role: MessageRole;
@@ -27,6 +39,7 @@ export interface MessageRecord {
   workflow_turn_id?: string | null;
   tool_name?: string | null;
   token_usage?: TokenUsage | null;
+  attachments?: MessageAttachment[] | null;
   pending?: boolean;
   workflow?: WorkflowSnapshot | null;
 }

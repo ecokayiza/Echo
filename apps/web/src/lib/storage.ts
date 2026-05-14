@@ -5,15 +5,31 @@ const STORAGE_KEYS = {
 
 export const storage = {
   getSessionId() {
-    return window.localStorage.getItem(STORAGE_KEYS.sessionId);
+    try {
+      return window.localStorage.getItem(STORAGE_KEYS.sessionId);
+    } catch {
+      return null;
+    }
   },
   setSessionId(value: string) {
-    window.localStorage.setItem(STORAGE_KEYS.sessionId, value);
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.sessionId, value);
+    } catch {
+      // URL state is still authoritative when storage is unavailable.
+    }
   },
   getSystemPrompt() {
-    return window.localStorage.getItem(STORAGE_KEYS.systemPrompt);
+    try {
+      return window.localStorage.getItem(STORAGE_KEYS.systemPrompt);
+    } catch {
+      return null;
+    }
   },
   setSystemPrompt(value: string) {
-    window.localStorage.setItem(STORAGE_KEYS.systemPrompt, value);
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.systemPrompt, value);
+    } catch {
+      // Storage can be unavailable on some mobile/private browser modes.
+    }
   },
 };

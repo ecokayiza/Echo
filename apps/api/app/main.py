@@ -580,7 +580,7 @@ def create_app(chat_service: ChatService | None = None):
     def create_session(payload: CreateSessionRequest | None = None):
         request = payload or CreateSessionRequest()
         session = service.create_session(
-            session_id=request.session_id or str(uuid4()),
+            session_id=request.session_id,
             title=request.title,
         )
         return SessionSummaryResponse(**session)
@@ -664,6 +664,9 @@ def create_app(chat_service: ChatService | None = None):
                 yield to_sse("error", {"detail": f"Chat request failed: {_exception_detail(exc)}"})
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    Config.CHAT_ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    app.mount("/api/artifacts", StaticFiles(directory=str(Config.CHAT_ARTIFACTS_DIR)), name="chat_artifacts")
 
     if WEB_DIST_DIR.exists():
         app.mount("/ui", StaticFiles(directory=str(WEB_DIST_DIR), html=True), name="web")

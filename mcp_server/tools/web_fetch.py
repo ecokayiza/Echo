@@ -17,51 +17,38 @@ SCREENSHOT_VIEWPORT = {"width": 1280, "height": 1600}
 
 
 def web_fetch(url: str, max_chars: int = 8000) -> dict[str, Any]:
-    """Fetch one public web page and return readable text."""
+    """Fetch one public web page, or capture only a screenshot when screenshot mode is enabled."""
     try:
         cleaned_url = _validated_url(url)
-        limit = max(1, min(int(max_chars or 8000), MAX_FETCH_CHARS))
         screenshot_mode = load_app_settings().web_fetch_screenshot_mode
-        fetch_error = None
-        try:
-            html = _fetch(cleaned_url)
-            title, content = _extract_text(html)
-        except Exception as exc:
-            if not screenshot_mode:
-                raise
-            fetch_error = str(exc)
-            title = ""
-            content = ""
-        image_url = None
-        screenshot_error = None
 
         if screenshot_mode:
             try:
-                rendered_title, rendered_content, image_url = _fetch_with_browser(cleaned_url)
-                title = rendered_title or title
-                content = rendered_content or content
+                image_url = _capture_screenshot_with_browser(cleaned_url)
             except Exception as exc:
-                screenshot_error = str(exc)
+                return _context([], error=f"Screenshot capture failed: {exc}")
+            return _context(
+                [
+                    {
+                        "title": urlparse(cleaned_url).netloc,
+                        "url": cleaned_url,
+                        "content": "",
+                        "image_url": image_url,
+                    }
+                ]
+            )
 
-        if not content.strip() and not image_url:
-            detail = "No readable text was extracted from the page."
-            if fetch_error:
-                detail = f"{detail} HTML fetch failed: {fetch_error}"
-            if screenshot_mode and screenshot_error:
-                detail = f"{detail} Screenshot capture failed: {screenshot_error}"
-            return _context([], error=detail)
+        limit = max(1, min(int(max_chars or 8000), MAX_FETCH_CHARS))
+        html = _fetch(cleaned_url)
+        title, content = _extract_text(html)
+        if not content.strip():
+            return _context([], error="No readable text was extracted from the page.")
 
         item = {
             "title": title or urlparse(cleaned_url).netloc,
             "url": cleaned_url,
-            "content": content[:limit] if content.strip() else "No readable text was extracted. Use the attached screenshot if the model supports vision.",
+            "content": content[:limit],
         }
-        if image_url:
-            item["image_url"] = image_url
-        if fetch_error:
-            item["fetch_error"] = fetch_error
-        if screenshot_error:
-            item["screenshot_error"] = screenshot_error
         return _context(
             [item]
         )
@@ -86,18 +73,18 @@ def _fetch(url: str) -> str:
         return body.decode(charset or "utf-8", errors="replace")
 
 
-def _fetch_with_browser(url: str) -> tuple[str, str, str]:
+def _capture_screenshot_with_browser(url: str) -> str:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return _fetch_with_browser_sync(url)
+        return _capture_screenshot_with_browser_sync(url)
 
-    result: dict[str, tuple[str, str, str]] = {}
+    result: dict[str, str] = {}
     error: dict[str, BaseException] = {}
 
     def run():
         try:
-            result["value"] = _fetch_with_browser_sync(url)
+            result["value"] = _capture_screenshot_with_browser_sync(url)
         except BaseException as exc:
             error["value"] = exc
 
@@ -109,7 +96,7 @@ def _fetch_with_browser(url: str) -> tuple[str, str, str]:
     return result["value"]
 
 
-def _fetch_with_browser_sync(url: str) -> tuple[str, str, str]:
+def _capture_screenshot_with_browser_sync(url: str) -> str:
     try:
         from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
         from playwright.sync_api import sync_playwright
@@ -145,16 +132,11 @@ def _fetch_with_browser_sync(url: str) -> tuple[str, str, str]:
                 page.wait_for_load_state("networkidle", timeout=2_000)
             except PlaywrightTimeoutError:
                 pass
-            title = page.title()
-            try:
-                content = page.locator("body").inner_text(timeout=5_000)
-            except Exception:
-                content = ""
             screenshot = page.screenshot(type="jpeg", quality=70, full_page=False)
         finally:
             browser.close()
 
-    return title, _plain_text(content), f"data:image/jpeg;base64,{base64.b64encode(screenshot).decode('ascii')}"
+    return f"data:image/jpeg;base64,{base64.b64encode(screenshot).decode('ascii')}"
 
 
 def _extract_text(html: str) -> tuple[str, str]:

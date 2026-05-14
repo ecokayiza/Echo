@@ -8,7 +8,7 @@ description: Unified Echo retrieval guidance for choosing and using date/time, l
 
 # Search
 
-Use this skill to choose between current date/time, local database evidence, web search results, and fetched web page text.
+Use this skill to choose between current date/time, local database evidence, web search results, fetched web page text, and screenshot-only web fetch evidence.
 
 ## Tool Choice
 
@@ -16,7 +16,7 @@ Use this skill to choose between current date/time, local database evidence, web
 - For current date/time/weekday/timezone questions, calling `date` is mandatory before answering. Do not answer these from model memory, training data, or an assumed internal clock.
 - Use `database_search("query", top_k=3)` for indexed project files, user-provided documents, stored notes, local knowledge, and questions that should be grounded in the active Echo database.
 - Use `web_search("query", max_results=5)` to find candidate public sources for fresh facts, official pages, documentation, and citations.
-- Use `web_fetch("https://example.com/page", max_chars=8000)` to read a specific result when snippets are not enough to answer.
+- Use `web_fetch("https://example.com/page", max_chars=8000)` to read a specific result when snippets are not enough to answer. When screenshot mode is enabled in Runtime Settings, `web_fetch` returns only a rendered screenshot for vision-capable models and does not extract page text.
 - Call retrieval tools through the provider-native tool calling channel; never print XML tags like `<web_fetch>` or JSON tool payloads as text.
 - Use `web_search` instead of `date` only when the user asks for external current facts beyond date/time.
 - Use database search before web search when local indexed evidence may answer the question.
@@ -36,7 +36,7 @@ Use this skill to choose between current date/time, local database evidence, web
 
 - Prefer local database evidence for claims about indexed files or user-provided material.
 - Prefer trustworthy web sources for external facts; cite URLs when web results inform the answer.
-- Prefer fetched page text over search snippets for detailed claims.
-- If `web_fetch` returns no readable text, use another source or rely on an attached screenshot only when the active model supports vision.
+- Prefer fetched page text over search snippets for detailed claims when screenshot mode is disabled.
+- When screenshot mode is enabled, rely on the fetched screenshot only when the active model supports vision; otherwise use another source.
 - If retrieved evidence conflicts, say what differs and prefer the source that best matches the user's requested scope.
 - If both tools return weak evidence, explain the uncertainty instead of overstating the answer.

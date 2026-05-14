@@ -19,6 +19,7 @@ class Config:
     CHAT_MEMORY_DIR = MEMORY_DIR / "chat_sessions"
     WORKFLOW_DRAFT_DIR = MEMORY_DIR / "workflow_live"
     MEMORY_ARTIFACTS_DIR = MEMORY_DIR / "artifacts"
+    CHAT_ARTIFACTS_DIR = MEMORY_ARTIFACTS_DIR / "chat"
     TEST_FILE_PATH = DATA_DIR / "C1" / "markdown" / "easy-rl-chapter1.md"
 
     CHUNK_SIZE = 1000

@@ -727,6 +727,13 @@
   pointer-events: auto;
 }
 
+@media (hover: none), (pointer: coarse) {
+  .database-document-card__menu-trigger {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .database-document-card__menu-trigger > svg {
   width: 0.96rem;
   height: 0.96rem;

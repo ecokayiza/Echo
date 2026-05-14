@@ -18,10 +18,10 @@ interface SessionPanelProps {
   ready: boolean;
   sessions: SessionSummary[];
   activeSessionId: string | null;
-  onCreate: () => void;
+  onCreate: () => void | Promise<void>;
   onDelete: (session: SessionSummary) => void;
   onRename: (session: SessionSummary, title: string) => void;
-  onSelect: (sessionId: string) => void;
+  onSelect: (sessionId: string) => void | Promise<void>;
 }
 
 export function SessionPanel({
@@ -87,6 +87,10 @@ export function SessionPanel({
     }
   }
 
+  function triggerCreate() {
+    void onCreate();
+  }
+
   return (
     <SectionCard
       bodyClassName="section-card__body--fill"
@@ -94,8 +98,15 @@ export function SessionPanel({
       eyebrow="Echo"
       title="Sessions"
       actions={
-        <Button disabled={busy} onClick={onCreate} variant="primary">
-          New
+        <Button
+          className="session-new-button"
+          disabled={busy}
+          onClick={() => {
+            triggerCreate();
+          }}
+          variant="primary"
+        >
+          New Session
         </Button>
       }
     >
@@ -120,7 +131,7 @@ export function SessionPanel({
                     disabled={busy}
                     onClick={() => {
                       if (!isEditing) {
-                        onSelect(session.session_id);
+                        void onSelect(session.session_id);
                       }
                     }}
                     type="button"

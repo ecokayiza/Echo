@@ -361,6 +361,12 @@
   min-width: 0;
 }
 
+.message-thoughts__log-body {
+  min-width: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
 .message-thoughts__log-text > :first-child {
   margin-top: 0;
 }
@@ -369,9 +375,49 @@
   margin-bottom: 0;
 }
 
+.message-attachments {
+  min-width: 0;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.message-attachments--compact {
+  margin-top: 0.1rem;
+}
+
+.message-attachment {
+  display: block;
+  width: min(100%, 34rem);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: #f8fafc;
+}
+
+.message-attachment__image {
+  display: block;
+  width: 100%;
+  max-height: 26rem;
+  object-fit: contain;
+}
+
 @media (max-width: 640px) {
   .message-thoughts__log {
     grid-template-columns: 1fr;
+  }
+
+  .message-action__button {
+    width: 1.55rem;
+    height: 1.55rem;
+    opacity: 0.88;
+    pointer-events: auto;
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  .message-action__button {
+    opacity: 0.88;
+    pointer-events: auto;
   }
 }
 

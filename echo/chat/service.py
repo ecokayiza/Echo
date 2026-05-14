@@ -72,9 +72,22 @@ class ChatService:
         return sessions.list()
 
     def create_session(self, session_id: str | None = None, title: str | None = None) -> dict[str, Any]:
+        cleaned_title = (title or "").strip()
+        if session_id is None and (not cleaned_title or cleaned_title == default_session_title()):
+            blank_sessions = [session for session in self.list_sessions() if self._is_blank_new_session(session)]
+            if blank_sessions:
+                keeper = blank_sessions[0]
+                for duplicate in blank_sessions[1:]:
+                    self._chat(duplicate["session_id"])[0].delete()
+
+                sessions, messages = self._chat(keeper["session_id"])
+                sessions.ensure(title=cleaned_title or default_session_title())
+                self._ensure_default_system(sessions, messages)
+                return sessions.summary()
+
         resolved_session_id = session_id or str(uuid4())
         sessions, messages = self._chat(resolved_session_id)
-        sessions.ensure(title=title or default_session_title())
+        sessions.ensure(title=cleaned_title or default_session_title())
         self._ensure_default_system(sessions, messages)
         return sessions.summary()
 
@@ -272,6 +285,7 @@ class ChatService:
                 tool_name=str(record.get("tool_name") or "") or None,
                 tool_call_id=str(record.get("tool_call_id") or "") or None,
                 tool_calls=record.get("tool_calls") if isinstance(record.get("tool_calls"), list) else None,
+                attachments=record.get("attachments") if isinstance(record.get("attachments"), list) else None,
                 token_usage=record.get("token_usage") if isinstance(record.get("token_usage"), dict) else None,
             )
             if msg.role == "assistant":
@@ -305,6 +319,15 @@ class ChatService:
         if len(system_messages) != 1 or (session["messages"] and session["messages"][0].role != "system"):
             current = system_messages[0].content if system_messages else None
             messages.ensure_system_prompt(current)
+
+    @staticmethod
+    def _is_blank_new_session(session: dict[str, Any]) -> bool:
+        return (
+            session.get("title") == default_session_title()
+            and session.get("message_count") == 0
+            and session.get("total_tokens", 0) == 0
+            and not session.get("preview")
+        )
 
     @staticmethod
     def _first_user_message(messages: Messages) -> Message | None:

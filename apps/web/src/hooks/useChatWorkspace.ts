@@ -2,6 +2,7 @@ import { startTransition, useEffect, useReducer, useRef, useState } from "react"
 
 import { api } from "@/lib/api";
 import { formatNumber, trimOrNull } from "@/lib/format";
+import { createClientId } from "@/lib/id";
 import {
   getDefaultPrompt,
   findPreviousUserIndex,
@@ -45,6 +46,7 @@ interface WorkspaceState {
   messages: MessageRecord[];
   workflow: WorkflowSnapshot | null;
   uploadJob: UploadJobRecord | null;
+  chatOpenRequest: number;
   statusText: string;
   statusTone: StatusTone;
   liveLabel: string;
@@ -64,7 +66,8 @@ type Action =
   | { type: "session:remove"; sessionId: string }
   | { type: "messages:set"; messages: MessageRecord[] }
   | { type: "workflow:set"; workflow: WorkflowSnapshot | null }
-  | { type: "upload-job:set"; uploadJob: UploadJobRecord | null };
+  | { type: "upload-job:set"; uploadJob: UploadJobRecord | null }
+  | { type: "chat:open" };
 
 const initialState: WorkspaceState = {
   ready: false,
@@ -79,6 +82,7 @@ const initialState: WorkspaceState = {
   messages: [],
   workflow: null,
   uploadJob: null,
+  chatOpenRequest: 0,
   statusText: "Connecting...",
   statusTone: "neutral",
   liveLabel: "Booting",
@@ -140,11 +144,16 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         sessions: mergeSessions(state.sessions, action.session),
       };
     case "session:apply":
+      const nextSessions = mergeSessions(state.sessions, action.payload.session);
       return {
         ...state,
         sessionId: action.payload.session.session_id,
         messages: action.payload.messages,
-        sessions: mergeSessions(state.sessions, action.payload.session),
+        sessions: isBlankNewSession(action.payload.session)
+          ? nextSessions.filter(
+              (session) => session.session_id === action.payload.session.session_id || !isBlankNewSession(session)
+            )
+          : nextSessions,
         workflow: action.workflow ?? null,
       };
     case "session:remove":
@@ -173,6 +182,11 @@ function reducer(state: WorkspaceState, action: Action): WorkspaceState {
         ...state,
         uploadJob: action.uploadJob,
       };
+    case "chat:open":
+      return {
+        ...state,
+        chatOpenRequest: state.chatOpenRequest + 1,
+      };
     default:
       return state;
   }
@@ -190,6 +204,14 @@ function delay(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+function isBlankMessageList(messages: MessageRecord[]) {
+  return messages.length === 0 || (messages.length === 1 && messages[0].role === "system");
+}
+
+function isBlankNewSession(session: SessionSummary) {
+  return session.title === "New Session" && session.message_count === 0 && session.total_tokens === 0 && !session.preview;
 }
 
 function normalizeLiveWorkflowRecord(
@@ -229,7 +251,39 @@ function normalizeLiveWorkflowRecord(
       record.token_usage && typeof record.token_usage === "object"
         ? (record.token_usage as MessageRecord["token_usage"])
         : null,
+    attachments: normalizeAttachments(record.attachments),
   };
+}
+
+function normalizeAttachments(value: unknown): MessageRecord["attachments"] {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const attachments = value.flatMap((item) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    const url = typeof record.url === "string" ? record.url.trim() : "";
+    const type = typeof record.type === "string" ? record.type.trim() : "";
+    if (!url || !type) {
+      return [];
+    }
+    return [
+      {
+        id: typeof record.id === "string" ? record.id : undefined,
+        type,
+        kind: typeof record.kind === "string" ? record.kind : null,
+        mime_type: typeof record.mime_type === "string" ? record.mime_type : null,
+        url,
+        path: typeof record.path === "string" ? record.path : null,
+        title: typeof record.title === "string" ? record.title : null,
+        source_url: typeof record.source_url === "string" ? record.source_url : null,
+        size_bytes: typeof record.size_bytes === "number" ? record.size_bytes : null,
+      },
+    ];
+  });
+  return attachments.length > 0 ? attachments : null;
 }
 
 function upsertLiveWorkflowRecord(records: MessageRecord[], nextRecord: MessageRecord) {
@@ -406,8 +460,8 @@ export function useChatWorkspace() {
   }, []);
 
   function syncSelectedSession(sessionId: string) {
-    storage.setSessionId(sessionId);
     setSessionIdInUrl(sessionId);
+    storage.setSessionId(sessionId);
     dispatch({ type: "session:select", sessionId });
   }
 
@@ -568,6 +622,7 @@ export function useChatWorkspace() {
 
   async function selectSession(sessionId: string) {
     syncSelectedSession(sessionId);
+    dispatch({ type: "chat:open" });
 
     await withBusy("Loading session...", async () => {
       const payload = await loadSessionSnapshot(sessionId);
@@ -581,48 +636,46 @@ export function useChatWorkspace() {
   }
 
   async function createSession(title?: string | null) {
-    if (
-      state.sessionId &&
-      (state.messages.length === 0 || (state.messages.length === 1 && state.messages[0].role === "system")) &&
-      !state.busy
-    ) {
-      // 没有任何实质内容时反复点击New Session，不真正发请求，仅仅让界面Focus或者反馈
-      dispatch({ type: "status", text: "Already in a blank session.", tone: "neutral", liveLabel: "Ready" });
-      return;
-    }
+    const currentPrompt = systemPromptDraft || state.meta?.default_system_prompt || "";
+    const existingBlankSession = state.sessions.find(isBlankNewSession);
 
-    await withBusy("Creating session...", async () => {
-      const sessionId = crypto.randomUUID(); // 在前端生成一个假的/临时的ID
-      const currentPrompt = systemPromptDraft || state.meta?.default_system_prompt || "";
-
-      // 不真正向后端发请求建立session，而是直接进入空状态
-      storage.setSessionId(sessionId);
-      setSessionIdInUrl(sessionId);
-
+    if (existingBlankSession) {
+      syncSelectedSession(existingBlankSession.session_id);
       startTransition(() => {
-        dispatch({ type: "session:select", sessionId });
         dispatch({
           type: "session:apply",
           payload: {
-            session: {
-              session_id: sessionId,
-              title: title ?? "New Session",
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-              message_count: 0,
-              preview: "",
-              token_usage: {},
-              total_tokens: 0,
-            },
-            messages: currentPrompt ? [{
-              id: crypto.randomUUID(),
-              role: "system",
-              content: currentPrompt,
-              created_at: new Date().toISOString(),
-            } as any] : [],
+            session: existingBlankSession,
+            messages: currentPrompt
+              ? [
+                  {
+                    id: createClientId(),
+                    role: "system" as const,
+                    content: currentPrompt,
+                    message_type: "system",
+                  },
+                ]
+              : [],
           },
         });
+        dispatch({ type: "chat:open" });
       });
+    } else {
+      startTransition(() => {
+        dispatch({ type: "chat:open" });
+      });
+    }
+
+    await withBusy("Creating session...", async () => {
+      const session = existingBlankSession ?? (await api.createSession({ title: title ?? "New Session" }));
+      syncSelectedSession(session.session_id);
+
+      const payload = currentPrompt
+        ? await api.updateSystemPrompt(session.session_id, currentPrompt)
+        : await api.getSession(session.session_id);
+
+      applySessionPayload(payload);
+      dispatch({ type: "chat:open" });
 
       dispatch({ type: "status", text: "Ready for your first message.", tone: "success", liveLabel: "Ready" });
     });

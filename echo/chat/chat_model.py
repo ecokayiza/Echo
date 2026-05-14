@@ -22,6 +22,7 @@ class Message(BaseModel):
     tool_name: Optional[str] = None
     tool_call_id: Optional[str] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
+    attachments: Optional[List[Dict[str, Any]]] = None
     token_usage: Optional[Dict[str, Any]] = None
     workflow: Optional[Dict[str, Any]] = None
 

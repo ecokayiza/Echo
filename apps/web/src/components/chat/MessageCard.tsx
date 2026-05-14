@@ -12,13 +12,14 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 
 import { IconActionMenu } from "@/components/common/IconActionMenu";
 import { formatTokenTotal, formatTokenUsage } from "@/lib/format";
-import type { MessageRecord, WorkflowSnapshot } from "@/types/chat";
+import type { MessageAttachment, MessageRecord, WorkflowSnapshot } from "@/types/chat";
 
 import { MarkdownMessage } from "./MarkdownMessage";
 
 interface ThoughtEntry {
   label: string;
   content: string;
+  attachments?: MessageAttachment[] | null;
   level?: string;
 }
 
@@ -216,7 +217,10 @@ export function MessageCard({
               {thoughtEntries.map((entry, index) => (
                 <div key={`${entry.label}-${index}`} className="message-thoughts__log" data-level={entry.level}>
                   <span className="message-thoughts__log-node">&lt;{entry.label}&gt;</span>
-                  <MarkdownMessage className="message-thoughts__log-text" content={entry.content} />
+                  <div className="message-thoughts__log-body">
+                    <MarkdownMessage className="message-thoughts__log-text" content={entry.content} />
+                    <MessageAttachments attachments={entry.attachments} compact />
+                  </div>
                 </div>
               ))}
             </div>
@@ -263,6 +267,7 @@ export function MessageCard({
         ) : (
           <MarkdownMessage className="message-card__body" content={displayContent} />
         )}
+        <MessageAttachments attachments={message.attachments} />
 
         {totalTokenLabel || !message.pending ? (
           <div className="message-card__footer">
@@ -286,6 +291,41 @@ export function MessageCard({
   );
 }
 
+function MessageAttachments({
+  attachments,
+  compact = false,
+}: {
+  attachments?: MessageAttachment[] | null;
+  compact?: boolean;
+}) {
+  const images = (attachments ?? []).filter((attachment) => attachment.type === "image" && attachment.url);
+  if (images.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className={`message-attachments${compact ? " message-attachments--compact" : ""}`}>
+      {images.map((attachment, index) => (
+        <a
+          className="message-attachment"
+          href={attachment.url}
+          key={attachment.id ?? attachment.path ?? `${attachment.url}-${index}`}
+          rel="noreferrer"
+          target="_blank"
+          title={attachment.source_url ?? attachment.title ?? "Open screenshot"}
+        >
+          <img
+            alt={attachment.title ?? "web_fetch screenshot"}
+            className="message-attachment__image"
+            loading="lazy"
+            src={attachment.url}
+          />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function buildThoughtEntries(message: MessageRecord, workflowMessages: MessageRecord[]): ThoughtEntry[] {
   if (message.pending) {
     return workflowMessages.length > 0 ? buildWorkflowMessageThoughtEntries(workflowMessages) : buildLiveThoughtEntries(message.workflow);
@@ -297,14 +337,16 @@ function buildThoughtEntries(message: MessageRecord, workflowMessages: MessageRe
 }
 
 function buildWorkflowMessageThoughtEntries(workflowMessages: MessageRecord[]): ThoughtEntry[] {
-  return workflowMessages.flatMap((entry) => {
+  return workflowMessages.flatMap<ThoughtEntry>((entry) => {
     if (entry.message_type === "tool") {
       const toolBlock = extractWorkflowBlock(entry.content, "tool");
       const content = summarizeToolThought(entry.tool_name, toolBlock);
-      return content ? [{ label: entry.tool_name || "tool", content }] : [];
+      return content || entry.attachments?.length
+        ? [{ label: entry.tool_name || "tool", content, attachments: entry.attachments }]
+        : [];
     }
     if (entry.role === "assistant") {
-      return (["plan", "think"] as const).flatMap((section) => {
+      return (["plan", "think"] as const).flatMap<ThoughtEntry>((section) => {
         const reasoningBlock = extractWorkflowBlock(entry.content, section);
         return reasoningBlock ? [{ label: section, content: reasoningBlock }] : [];
       });

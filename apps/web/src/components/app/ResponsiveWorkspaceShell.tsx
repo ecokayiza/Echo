@@ -8,10 +8,17 @@ import { useEffect, useState, type ReactNode } from "react";
 
 type MobilePanel = "chat" | "sessions" | "database" | "tools";
 
+interface WorkspacePanelControls {
+  isMobile: boolean;
+  openChat: () => void;
+}
+
 interface ResponsiveWorkspaceShellProps {
+  activeSessionId?: string | null;
+  chatOpenRequest?: number;
   chat: ReactNode;
   database: ReactNode;
-  sessions: ReactNode;
+  sessions: ReactNode | ((controls: WorkspacePanelControls) => ReactNode);
   tools: ReactNode;
 }
 
@@ -26,14 +33,31 @@ const mobileTabs: Array<{
   { id: "tools", label: "Tools", icon: WrenchScrewdriverIcon },
 ];
 
-export function ResponsiveWorkspaceShell({ chat, database, sessions, tools }: ResponsiveWorkspaceShellProps) {
+export function ResponsiveWorkspaceShell({
+  activeSessionId,
+  chatOpenRequest = 0,
+  chat,
+  database,
+  sessions,
+  tools,
+}: ResponsiveWorkspaceShellProps) {
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [activeMobilePanel, setActiveMobilePanel] = useState<MobilePanel>("chat");
   const [leftHidden, setLeftHidden] = useState(false);
   const [rightHidden, setRightHidden] = useState(false);
+  const openChat = () => {
+    setActiveMobilePanel("chat");
+  };
+  const resolvedSessions =
+    typeof sessions === "function"
+      ? sessions({
+          isMobile,
+          openChat,
+        })
+      : sessions;
   const mobileContent: Record<MobilePanel, ReactNode> = {
     chat,
-    sessions,
+    sessions: resolvedSessions,
     database,
     tools,
   };
@@ -46,6 +70,18 @@ export function ResponsiveWorkspaceShell({ chat, database, sessions, tools }: Re
   ]
     .filter(Boolean)
     .join(" ");
+
+  useEffect(() => {
+    if (isMobile && activeSessionId) {
+      setActiveMobilePanel("chat");
+    }
+  }, [activeSessionId, isMobile]);
+
+  useEffect(() => {
+    if (isMobile && chatOpenRequest > 0) {
+      setActiveMobilePanel("chat");
+    }
+  }, [chatOpenRequest, isMobile]);
 
   return (
     <>
@@ -90,7 +126,7 @@ export function ResponsiveWorkspaceShell({ chat, database, sessions, tools }: Re
         ) : (
           <div className={desktopClassName}>
             <aside className="app-shell__sidebar" aria-label="Workspace sources">
-              {sessions}
+              {resolvedSessions}
               {database}
             </aside>
 
