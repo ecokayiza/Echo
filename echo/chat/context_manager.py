@@ -8,7 +8,7 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
-from ..config import Config
+from ..settings import Config
 from ..workflow_sections import (
     parse_workflow_sections,
     render_workflow_sections,

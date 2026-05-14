@@ -25,7 +25,7 @@ from echo.chat.registry import (
     normalize_model_settings_document,
     save_model_settings_document,
 )
-from echo.config import Config
+from echo.settings import Config
 from mcp_server.rag import (
     Assembler,
     ChunkerFactory,

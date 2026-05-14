@@ -17,7 +17,7 @@ from openai import (
 )
 
 from echo.chat.registry import EmbeddingModelSettings, get_active_embedding_model_settings, normalize_embedding_model_settings
-from echo.config import Config
+from echo.settings import Config
 from .errors import EmbeddingError
 
 DEFAULT_QUERY_INSTRUCTION = "Given a user query, retrieve relevant passages that answer the query."

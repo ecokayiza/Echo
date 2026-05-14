@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from echo.config import Config
+from echo.settings import Config
 
 MAX_LIST_RESULTS = 200
 MAX_READ_CHARS = 50_000

@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 
-from echo.config import Config
+from echo.settings import Config
 from echo.settings import load_app_settings
 from .errors import IndexingError
 

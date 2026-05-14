@@ -5,7 +5,7 @@ from typing import Any
 
 import chromadb
 
-from echo.config import Config
+from echo.settings import Config
 
 
 class VectorDatabase:

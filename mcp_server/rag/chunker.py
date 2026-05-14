@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
-from echo.config import Config
+from echo.settings import Config
 from echo.settings import load_app_settings
 from .errors import IndexingError
 
@@ -243,4 +243,3 @@ if __name__ == "__main__":
         chunks = ChunkerFactory.chunk(data, ext)        
     except ValueError as e:
         print(e)
-

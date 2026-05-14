@@ -6,6 +6,7 @@ from contextlib import redirect_stdout
 from functools import wraps
 from typing import Any
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 from .tools.registry import TOOL_FUNCTIONS
@@ -27,9 +28,12 @@ def _stdio_safe_tool(tool_function):
         return async_wrapper
 
     @wraps(tool_function)
-    def wrapper(*args: Any, **kwargs: Any):
-        with redirect_stdout(sys.stderr):
-            return tool_function(*args, **kwargs)
+    async def wrapper(*args: Any, **kwargs: Any):
+        def run_tool():
+            with redirect_stdout(sys.stderr):
+                return tool_function(*args, **kwargs)
+
+        return await anyio.to_thread.run_sync(run_tool)
 
     wrapper.__signature__ = signature
     return wrapper

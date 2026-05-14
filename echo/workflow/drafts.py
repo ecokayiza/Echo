@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from ..config import Config
+from ..settings import Config
 
 
 class WorkflowDraftStore:

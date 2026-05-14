@@ -2,7 +2,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from hashlib import sha1
 
-from ..config import Config
+from ..settings import Config
 from .chat_model import BaseChatModel, OpenAIChatModel
 
 WIRE_API_CHAT_COMPLETIONS = "chat_completions"

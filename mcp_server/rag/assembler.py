@@ -2,7 +2,7 @@ import os
 from collections.abc import Callable
 
 from echo.chat.registry import normalize_embedding_model_settings
-from echo.config import Config
+from echo.settings import Config
 
 from .schema import RAGRecord, RAGMetadata, ExtraAttributes
 from .database_registry import DatabaseSettings, resolve_database_embedding_settings

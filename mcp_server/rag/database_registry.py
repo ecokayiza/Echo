@@ -12,7 +12,7 @@ from echo.chat.registry import (
     normalize_embedding_model_settings,
     resolve_embedding_model_settings,
 )
-from echo.config import Config
+from echo.settings import Config
 
 
 @dataclass(frozen=True)

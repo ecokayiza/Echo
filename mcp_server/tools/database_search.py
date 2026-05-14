@@ -2,6 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+# Keep these imports at module load time. Lazy importing the RAG stack inside
+# the stdio MCP request path can hang under the Windows child process.
+from mcp_server.rag import database_registry, embedder, schema, vector_database
+
+
 def database_search(query: str, top_k: int = 4) -> dict[str, Any]:
     """Search the local Echo vector database for semantically related chunks."""
     cleaned = " ".join((query or "").strip().split())
@@ -15,16 +20,14 @@ def database_search(query: str, top_k: int = 4) -> dict[str, Any]:
         }
 
     try:
-        from mcp_server.rag.database_registry import get_active_database_settings, resolve_database_embedding_settings
-        from mcp_server.rag.embedder import OpenAICompatibleEmbedder
-        from mcp_server.rag.schema import RAGRecord
-        from mcp_server.rag.vector_database import VectorDatabase
-
-        database = get_active_database_settings()
-        embedding_settings = resolve_database_embedding_settings(database)
-        query_embedding = OpenAICompatibleEmbedder.embed_query(cleaned, settings=embedding_settings)
-        results = VectorDatabase(collection_name=database.collection_name).query_with_vector(query_embedding, n_results=limit)
-        records = RAGRecord.get_records_from_results(results)
+        database = database_registry.get_active_database_settings()
+        embedding_settings = database_registry.resolve_database_embedding_settings(database)
+        query_embedding = embedder.OpenAICompatibleEmbedder.embed_query(cleaned, settings=embedding_settings)
+        results = vector_database.VectorDatabase(collection_name=database.collection_name).query_with_vector(
+            query_embedding,
+            n_results=limit,
+        )
+        records = schema.RAGRecord.get_records_from_results(results)
         items = [
             {
                 "title": record.metadata.source_name,

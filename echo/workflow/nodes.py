@@ -429,7 +429,7 @@ async def _stream_decision_response(
     native_tool_calls: list[dict[str, Any]] = []
     content = ""
     streamed_answer = ""
-    record_id = _record_id(state, node)
+    record_id = _decision_record_id(state, node)
     writer = get_stream_writer()
 
     def on_usage(payload: dict[str, Any] | None):
@@ -613,6 +613,13 @@ def _record_id(state: WorkflowState, node: str, *, suffix: str | None = None) ->
     if suffix:
         parts.append(suffix)
     return ":".join(parts)
+
+
+def _decision_record_id(state: WorkflowState, node: str) -> str:
+    """Build a stable live id for one plan/think decision pass."""
+    if node == WorkflowStep.THINK.value:
+        return _record_id(state, node, suffix=str(state["retrieve_round"]))
+    return _record_id(state, node)
 
 
 def _tool_call_id(state: WorkflowState, *, round_number: int) -> str:
