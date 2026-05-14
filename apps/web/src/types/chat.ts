@@ -135,6 +135,7 @@ export interface ChatModelConfig {
   model: string | null;
   api_key: string | null;
   base_url: string | null;
+  wire_api: "chat_completions" | "responses";
   temperature: number;
   top_p: number | null;
   custom_request_params: JsonObject | null;
@@ -166,6 +167,7 @@ export interface AppSettingsDocument {
   max_retrieve_rounds: number;
   use_marker_pdf_loader: boolean;
   web_search_backend: "auto" | "duckduckgo" | "bing" | "baidu";
+  web_fetch_screenshot_mode: boolean;
 }
 
 export interface SkillRecord {

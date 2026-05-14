@@ -1,6 +1,6 @@
 const STORAGE_KEYS = {
-  sessionId: "eco-rag.session-id",
-  systemPrompt: "eco-rag.system-prompt",
+  sessionId: "echo.session-id",
+  systemPrompt: "echo.system-prompt",
 } as const;
 
 export const storage = {

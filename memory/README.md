@@ -12,7 +12,7 @@ memory/
 
 ## chat_sessions
 
-`eco_rag.chat.Sessions` 会把聊天历史写到这里。
+`echo.chat.Sessions` 会把聊天历史写到这里。
 
 当前 session 文件会保存：
 
@@ -31,7 +31,7 @@ memory/
 
 ## workflow_live
 
-`eco_rag.workflow.WorkflowDraftStore` 会把可恢复的 live workflow draft 写到这里。
+`echo.workflow.WorkflowDraftStore` 会把可恢复的 live workflow draft 写到这里。
 
 它用于：
 

@@ -234,6 +234,19 @@ export function ManagementSettingsPage({
             onUpdate={onUpdateChatModel}
             renderSpecificFields={({ busy: fieldBusy, index, model, onUpdate }) => (
               <>
+                <Field htmlFor="chat-model-wire-api" label="Wire API">
+                  <select
+                    disabled={fieldBusy}
+                    id="chat-model-wire-api"
+                    onChange={(event) => {
+                      onUpdate(index, "wire_api", event.target.value as ChatModelConfig["wire_api"]);
+                    }}
+                    value={model.wire_api}
+                  >
+                    <option value="chat_completions">Chat Completions</option>
+                    <option value="responses">Responses</option>
+                  </select>
+                </Field>
                 <Field htmlFor="chat-model-temperature" label="Temperature">
                   <input
                     disabled={fieldBusy}

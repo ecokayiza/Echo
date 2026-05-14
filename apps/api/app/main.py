@@ -12,8 +12,8 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from eco_rag.chat import ChatService
-from eco_rag.chat.registry import (
+from echo.chat import ChatService
+from echo.chat.registry import (
     ChatModelSettings,
     EmbeddingModelSettings,
     ModelSettingsDocument,
@@ -25,8 +25,8 @@ from eco_rag.chat.registry import (
     normalize_model_settings_document,
     save_model_settings_document,
 )
-from eco_rag.config import Config
-from eco_rag.indexing import (
+from echo.config import Config
+from mcp_server.rag import (
     Assembler,
     ChunkerFactory,
     DataLoaderFactory,
@@ -40,11 +40,11 @@ from eco_rag.indexing import (
     resolve_database_embedding_settings,
     select_database_settings,
 )
-from eco_rag.indexing.errors import IndexingError
-from eco_rag.settings import AppSettings, load_app_settings, save_app_settings
-from eco_rag.skills import SkillRecord, SkillSettingsDocument, load_skill_settings_document, save_skill_settings_document
-from eco_rag.workflow import WorkflowStatus, WorkflowStep
-from eco_rag.workflow.prompts import default_system_prompt
+from mcp_server.rag.errors import IndexingError
+from echo.settings import AppSettings, load_app_settings, save_app_settings
+from echo.skills import SkillRecord, SkillSettingsDocument, load_skill_settings_document, save_skill_settings_document
+from echo.workflow import WorkflowStatus, WorkflowStep
+from echo.workflow.prompts import default_system_prompt
 
 WEB_DIR = Config.ROOT_DIR / "apps" / "web"
 WEB_DIST_DIR = WEB_DIR / "dist"
@@ -150,6 +150,7 @@ class ChatModelSettingsRequest(BaseModel):
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
+    wire_api: str = "chat_completions"
     temperature: float = 1.0
     top_p: float | None = None
     custom_request_params: dict[str, Any] | None = None
@@ -220,6 +221,7 @@ class AppSettingsRequest(BaseModel):
     max_retrieve_rounds: int = Field(default=10, ge=1)
     use_marker_pdf_loader: bool = True
     web_search_backend: str = "auto"
+    web_fetch_screenshot_mode: bool = False
 
     def to_settings(self) -> AppSettings:
         return AppSettings(**self.model_dump())
@@ -232,6 +234,7 @@ class AppSettingsRequest(BaseModel):
             max_retrieve_rounds=settings.max_retrieve_rounds,
             use_marker_pdf_loader=settings.use_marker_pdf_loader,
             web_search_backend=settings.web_search_backend,
+            web_fetch_screenshot_mode=settings.web_fetch_screenshot_mode,
         )
 
 
@@ -286,9 +289,9 @@ def create_app(chat_service: ChatService | None = None):
     ensure_database_settings_document()
 
     app = FastAPI(
-        title="Eco_RAG API",
+        title="Echo API",
         version="0.1.0",
-        description="Backend entrypoint for the Eco_RAG desktop and web clients.",
+        description="Backend entrypoint for the Echo desktop and web clients.",
     )
     service = chat_service or ChatService()
     upload_jobs: dict[str, dict[str, Any]] = _load_upload_jobs()
@@ -342,7 +345,7 @@ def create_app(chat_service: ChatService | None = None):
                 if payload.embedding_model is None:
                     raise ValueError("Embedding model settings are required.")
                 settings = normalize_embedding_model_settings(payload.embedding_model.model_dump())
-                embeddings = OpenAICompatibleEmbedder.embed_documents("Eco RAG API test", settings=settings)
+                embeddings = OpenAICompatibleEmbedder.embed_documents("Echo API test", settings=settings)
                 dimensions = len(embeddings[0]) if embeddings else 0
                 if dimensions <= 0:
                     raise ValueError("Embedding provider returned an empty vector.")
@@ -365,6 +368,7 @@ def create_app(chat_service: ChatService | None = None):
             max_retrieve_rounds=payload.max_retrieve_rounds,
             use_marker_pdf_loader=payload.use_marker_pdf_loader,
             web_search_backend=payload.web_search_backend,
+            web_fetch_screenshot_mode=payload.web_fetch_screenshot_mode,
             enabled_skills=current.enabled_skills,
             default_skills=current.default_skills,
         )
@@ -620,7 +624,7 @@ def create_app(chat_service: ChatService | None = None):
             except ValueError as exc:
                 yield to_sse("error", {"detail": str(exc)})
             except Exception as exc:
-                yield to_sse("error", {"detail": f"Chat request failed: {exc}"})
+                yield to_sse("error", {"detail": f"Chat request failed: {_exception_detail(exc)}"})
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -657,7 +661,7 @@ def create_app(chat_service: ChatService | None = None):
             except ValueError as exc:
                 yield to_sse("error", {"detail": str(exc)})
             except Exception as exc:
-                yield to_sse("error", {"detail": f"Chat request failed: {exc}"})
+                yield to_sse("error", {"detail": f"Chat request failed: {_exception_detail(exc)}"})
 
         return StreamingResponse(event_stream(), media_type="text/event-stream")
 
@@ -696,6 +700,16 @@ def _database_state_payload() -> dict[str, Any]:
 def _sanitize_upload_filename(filename: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "_", (filename or "").strip())
     return cleaned.strip(" .") or f"upload-{uuid4().hex[:8]}.txt"
+
+
+def _exception_detail(exc: BaseException) -> str:
+    """Render nested async ExceptionGroups as the useful inner error text."""
+    if isinstance(exc, BaseExceptionGroup):
+        messages = [_exception_detail(item) for item in exc.exceptions]
+        messages = [message for message in messages if message]
+        return "; ".join(messages) or str(exc)
+    message = str(exc).strip()
+    return message or exc.__class__.__name__
 
 
 async def _save_uploaded_document(upload: UploadFile, collection_name: str):

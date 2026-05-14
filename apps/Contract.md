@@ -62,10 +62,20 @@
 {
   "id": "message-3",
   "role": "assistant",
-  "content": "<plan>\nNeed retrieval.\n</plan>",
+  "content": "<echo_plan>\nNeed retrieval.\n</echo_plan>",
   "message_type": "plan",
   "workflow_turn_id": "user-1",
   "tool_name": null,
+  "tool_calls": [
+    {
+      "id": "call-1",
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "arguments": "{\"query\":\"Echo workflow\"}"
+      }
+    }
+  ],
   "token_usage": {
     "prompt_tokens": 5,
     "completion_tokens": 1,
@@ -81,6 +91,7 @@
 - `message_type`
 - `workflow_turn_id`
 - `tool_name`
+- `tool_calls`
 - `token_usage`
 
 `message_type` 允许：
@@ -517,5 +528,5 @@ payload：
 
 语义：
 
-- live `plan / tool / think` 更新
+- live `plan / tool / think / answer` 更新
 - pending answer card 用它来流式更新 `Thoughts`

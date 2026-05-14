@@ -91,7 +91,7 @@ export function SessionPanel({
     <SectionCard
       bodyClassName="section-card__body--fill"
       className="section-card--fill"
-      eyebrow="Eco_RAG"
+      eyebrow="Echo"
       title="Sessions"
       actions={
         <Button disabled={busy} onClick={onCreate} variant="primary">

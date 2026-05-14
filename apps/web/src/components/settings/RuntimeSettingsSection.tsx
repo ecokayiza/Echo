@@ -65,6 +65,7 @@ export function RuntimeSettingsSection({ busy, settings, onUpdate }: RuntimeSett
             />
             <span>Use Marker for PDF loading</span>
           </label>
+
         </section>
 
         <section className="settings-detail">
@@ -104,6 +105,18 @@ export function RuntimeSettingsSection({ busy, settings, onUpdate }: RuntimeSett
               </select>
             </Field>
           </div>
+
+          <label className="settings-toggle settings-toggle--switch">
+            <input
+              checked={settings.web_fetch_screenshot_mode}
+              disabled={busy}
+              onChange={(event) => {
+                onUpdate("web_fetch_screenshot_mode", event.target.checked);
+              }}
+              type="checkbox"
+            />
+            <span>Use screenshots for web fetch</span>
+          </label>
         </section>
       </div>
     </div>

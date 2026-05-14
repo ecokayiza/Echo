@@ -20,5 +20,6 @@ apps/web/node_modules/
 apps/web/dist/
 models.json
 databases.json
-eco_rag.egg-info/
+echo.egg-info/
 uv.lock
+tests/

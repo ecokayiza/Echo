@@ -22,12 +22,17 @@ function normalizeJsonObject(value: unknown): JsonObject | null {
   }
 }
 
+function normalizeWireApi(value: unknown): ChatModelConfig["wire_api"] {
+  return value === "responses" ? "responses" : "chat_completions";
+}
+
 export function createEmptyChatModel(index: number, initial?: Partial<ChatModelConfig>): ChatModelConfig {
   return {
     name: initial?.name ?? `Chat Model ${index}`,
     model: initial?.model ?? null,
     api_key: initial?.api_key ?? null,
     base_url: initial?.base_url ?? null,
+    wire_api: normalizeWireApi(initial?.wire_api),
     temperature: initial?.temperature ?? 1,
     top_p: initial?.top_p ?? null,
     custom_request_params: normalizeJsonObject(initial?.custom_request_params),
@@ -53,6 +58,7 @@ export function normalizeChatModelConfig(
     model: trimOrNull(config?.model),
     api_key: trimOrNull(config?.api_key),
     base_url: trimOrNull(config?.base_url),
+    wire_api: normalizeWireApi(config?.wire_api),
     temperature: normalizeNumber(config?.temperature, 1) ?? 1,
     top_p: normalizeNumber(config?.top_p, null),
     custom_request_params: normalizeJsonObject(config?.custom_request_params),

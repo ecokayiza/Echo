@@ -1,6 +1,6 @@
 # API 后端说明
 
-这个目录是 Eco_RAG 的 FastAPI 后端入口。
+这个目录是 Echo 的 FastAPI 后端入口。
 
 主链路：
 
@@ -8,7 +8,7 @@
 
 更细的 workflow 设计见：
 
-- [eco_rag/workflow/README.md](../../eco_rag/workflow/README.md)
+- [echo/workflow/README.md](../../echo/workflow/README.md)
 
 ## 后端负责什么
 
@@ -54,8 +54,8 @@
 
 - `plan` / `think` 是唯一模型决策节点
 - `retrieve` / `answer` 是内部控制节点
-- `tool` 执行 `load_skill`、`database_search`、`web_search`
-- 运行时 memory 使用 flat transcript，完整保留当前回合的 `plan / tool / think`
+- `tool` 执行 MCP 工具：`load_skill`、`date`、`database_search`、`web_search`、`web_fetch` 和 `workspace_*`
+- 运行时 memory 使用 flat transcript，完整保留当前回合的 `plan / tool / think / answer`
 - workflow 结束后把真实内部记录写入 session history
 
 最终会落盘：
@@ -75,7 +75,7 @@
   - live workflow snapshot
 - `record`
   - 一条内部 workflow 记录
-  - 例如 assistant `plan`、tool `tool`、assistant `think`
+- 例如 assistant `plan`、tool `tool`、assistant `think`、assistant `answer`
 - `chunk`
   - 最终 `answer` 的增量文本
 - `done`
@@ -97,10 +97,9 @@ Web UI 用法：
 
 - 保留唯一 system prompt
 - 排除 `tool`
-- 同一 `workflow_turn_id` 只保留一条 assistant 推理消息
-- 优先最后一条 `think`
-- 没有 `think` 时回退到 `plan`
-- 不重复包含同轮 `answer`
+- 同一 `workflow_turn_id` 会压缩成一条 assistant workflow context
+- 保留可见的 `plan`、`think`、`answer` sections
+- 排除 tool result bodies 和 provider `tool_calls`
 
 运行中的恢复依赖：
 

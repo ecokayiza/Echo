@@ -4,6 +4,7 @@
   "max_retrieve_rounds": 10,
   "use_marker_pdf_loader": true,
   "web_search_backend": "auto",
+  "web_fetch_screenshot_mode": true,
   "enabled_skills": [
     "search",
     "workspace-files"

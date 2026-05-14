@@ -46,6 +46,7 @@ const defaultAppSettings: AppSettingsDocument = {
   max_retrieve_rounds: 10,
   use_marker_pdf_loader: true,
   web_search_backend: "auto",
+  web_fetch_screenshot_mode: false,
 };
 
 export function useSettingsManagement({
@@ -412,6 +413,10 @@ function normalizeAppSettings(settings: Partial<AppSettingsDocument> | null | un
         ? settings.use_marker_pdf_loader
         : defaultAppSettings.use_marker_pdf_loader,
     web_search_backend: normalizeWebSearchBackend(settings?.web_search_backend),
+    web_fetch_screenshot_mode:
+      typeof settings?.web_fetch_screenshot_mode === "boolean"
+        ? settings.web_fetch_screenshot_mode
+        : defaultAppSettings.web_fetch_screenshot_mode,
   };
 }
 

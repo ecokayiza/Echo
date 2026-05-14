@@ -1,6 +1,6 @@
-# Eco_RAG Web UI
+# Echo Web UI
 
-这个目录是 Eco_RAG 的 React 前端。
+这个目录是 Echo 的 React 前端。
 
 它不自己决定 workflow，只消费后端提供的 session history、SSE 事件和 database state。
 
@@ -37,7 +37,7 @@
 - `workflow`
   - 更新右侧 live workflow panel
 - `record`
-  - 把当前回合的 `plan / tool / think` 追加进 pending answer 的 `Thoughts`
+  - 把当前回合的 `plan / tool / think / answer` 追加进 pending answer 的 `Thoughts`
 - `chunk`
   - 增量更新最终 answer 文本
 
@@ -70,7 +70,7 @@
 
 `Thoughts` 不会显示：
 
-- 内嵌的 `<answer>...</answer>`
+- 内嵌的 `<echo_answer>...</echo_answer>`
 - `tool_back`
 - routine workflow log spam
 

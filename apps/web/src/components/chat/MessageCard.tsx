@@ -49,7 +49,7 @@ export function MessageCard({
   const isUser = message.role === "user";
   const isAssistant = message.role === "assistant";
   const workflowAnswer =
-    isAssistant && ["plan", "think"].includes(message.message_type ?? "")
+    isAssistant && ["answer", "plan", "think"].includes(message.message_type ?? "")
       ? extractWorkflowBlock(message.content, "answer")
       : "";
   const displayContent = workflowAnswer || message.content;
@@ -303,11 +303,11 @@ function buildWorkflowMessageThoughtEntries(workflowMessages: MessageRecord[]): 
       const content = summarizeToolThought(entry.tool_name, toolBlock);
       return content ? [{ label: entry.tool_name || "tool", content }] : [];
     }
-    if (entry.message_type === "plan" || entry.message_type === "think") {
-      const reasoningBlock = extractWorkflowBlock(entry.content, entry.message_type);
-      return reasoningBlock
-        ? [{ label: entry.message_type, content: reasoningBlock }]
-        : [];
+    if (entry.role === "assistant") {
+      return (["plan", "think"] as const).flatMap((section) => {
+        const reasoningBlock = extractWorkflowBlock(entry.content, section);
+        return reasoningBlock ? [{ label: section, content: reasoningBlock }] : [];
+      });
     }
     return [];
   });
@@ -348,13 +348,15 @@ function parseWorkflowSections(content: string): Record<string, string> {
   for (const line of content.split(/\r?\n/)) {
     const openMatch = line.trim().match(/^<([a-z_]+)>$/i);
     const closeMatch = line.trim().match(/^<\/([a-z_]+)>$/i);
+    const openName = openMatch ? canonicalWorkflowSectionName(openMatch[1]) : null;
+    const closeName = closeMatch ? canonicalWorkflowSectionName(closeMatch[1]) : null;
 
-    if (!current && openMatch && isWorkflowSectionName(openMatch[1])) {
-      current = openMatch[1].toLowerCase();
+    if (!current && openName) {
+      current = openName;
       sections[current] = [];
       continue;
     }
-    if (current && closeMatch?.[1].toLowerCase() === current) {
+    if (current && closeName === current) {
       current = null;
       continue;
     }
@@ -367,5 +369,14 @@ function parseWorkflowSections(content: string): Record<string, string> {
 }
 
 function isWorkflowSectionName(name: string) {
-  return ["plan", "think", "retrieve", "answer", "tool"].includes(name.toLowerCase());
+  return canonicalWorkflowSectionName(name) != null;
+}
+
+function canonicalWorkflowSectionName(name: string) {
+  const cleaned = name.toLowerCase();
+  if (cleaned.startsWith("echo_")) {
+    const canonical = cleaned.slice("echo_".length);
+    return ["plan", "think", "answer", "tool"].includes(canonical) ? canonical : null;
+  }
+  return null;
 }

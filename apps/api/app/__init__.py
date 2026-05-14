@@ -1,1 +1,1 @@
-"""FastAPI application package for Eco_RAG."""
+"""FastAPI application package for Echo."""

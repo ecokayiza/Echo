@@ -3,7 +3,7 @@ requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eco-rag"
+name = "echo"
 version = "0.1.0"
 description = "Reusable RAG core with FastAPI, React, and Tauri app scaffolds."
 readme = "readme.md"
@@ -13,8 +13,10 @@ dependencies = [
     "fastapi",
     "langgraph",
     "langchain-text-splitters",
+    "mcp[cli]",
     "openai",
     "pydantic>=2",
+    "playwright",
     "python-multipart",
     "PyPDF2",
     "PyYAML",
@@ -23,8 +25,8 @@ dependencies = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["eco_rag*"]
+include = ["echo*", "mcp_server*"]
 
 [tool.setuptools.package-data]
-"eco_rag.workflow" = ["prompt_templates/*.yaml"]
-"eco_rag.skills" = ["*.md", "*/SKILL.md"]
+"echo.workflow" = ["prompt_templates/*.yaml"]
+"echo.skills" = ["*.md", "*/SKILL.md"]
