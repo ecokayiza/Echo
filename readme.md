@@ -1,10 +1,6 @@
-# Echo
-
 ![Echo cover](assets/cover.png)
 
-Echo is an observable LLM workspace built around chat, tool execution, RAG, and a visible decision workflow.
-
-Instead of treating RAG as a fixed prompt template, Echo runs each user turn through a LangGraph workflow. The model first plans, chooses a tool when more context or an action is needed, executes that tool, thinks over the result, and then streams the final answer back to the UI.
+> ***Echo*** is an observable LLM workspace built around chat, tool execution, RAG, and a visible decision workflow.
 
 ![Echo workspace](assets/home.png)
 
@@ -12,31 +8,41 @@ Instead of treating RAG as a fixed prompt template, Echo runs each user turn thr
 
 ## Highlights
 
-- Chat-first workspace with persistent sessions stored as JSON.
-- Observable LangGraph workflow: `plan`, `tool`, `think`, `answer`.
-- Live SSE streaming for both internal reasoning records and final answer chunks.
-- React + TypeScript + Vite web UI with session, workflow, database, model, runtime, and skill settings.
-- FastAPI backend with REST endpoints and streaming chat APIs.
-- RAG pipeline with per-database embedding model pairing.
-- OpenAI-compatible chat and embedding providers, including local provider endpoints.
-- Chroma-backed vector storage under `db/`.
-- Document upload and indexing for `.md`, `.txt`, and `.pdf`.
-- Optional Marker-powered PDF conversion with PyPDF2 fallback.
-- Built-in MCP-style tools for skills, date, database search, web search, web fetch, and bounded workspace files.
+- Built-in ***MCP-style tools*** for ***skills***, date, database search, web search, web fetch, and bounded workspace files.
+- Chat-first workspace with **persistent sessions** stored as JSON.
+- Observable LangGraph **workflow**: `plan`, `tool`, `think`, `answer`.
+- Live **SSE streaming** for both internal reasoning records and final answer chunks.
+- **OpenAI-compatible chat and embedding providers**, including local provider endpoints.
+- **React + TypeScript + Vite web UI** with session, workflow, database, model, runtime, and skill settings.
+- **FastAPI backend** with REST endpoints and streaming chat APIs.
+- **RAG pipeline with** per-database embedding model pairing.
+- - Chroma-backed vector storage under `db/`.
+- - Document upload and indexing for `.md`, `.txt`, and `.pdf`.
+- - Optional Marker-powered PDF conversion with PyPDF2 fallback.
+- Multiple **web search** engines support and screenshot mode for vision models.
 
-## Project Status
+## Workflow
 
-Echo is an early local-first LLM workspace. It is useful for experimentation, workflow inspection, and building a personal RAG/chat environment, but the public API and on-disk formats may still change.
+Echo uses one fixed user-facing workflow shape. Retrieval here is part of tool execution. 
+*Skills orgnize/classify tools and with defination and guidances.*
+Tools include database search, web search, web fetch, skill loading, and workspace operations.
 
-The repository currently keeps runtime state local:
+```mermaid
+flowchart LR
+  Start([START]) --> Plan[plan]
+  Plan --> Tool[tool]
+  Plan --> Answer[answer]
+  Tool --> Think[think]
+  Think --> Tool
+  Think --> Answer
+  Answer --> End([END])
+```
 
-- `models.json` stores chat and embedding provider settings.
-- `databases.json` stores vector database registry state.
-- `db/` stores vector database files.
-- `memory/` stores chat sessions, workflow drafts, and generated artifacts.
-- `data/` stores uploaded source files and workspace files.
+`plan`/`think` as **decision** nodes, they can be passed.
+`tool`/`answer` as **action** nodes, they are required in each reply.
 
-These paths are ignored by Git where appropriate. Treat them as local runtime data.
+*tool results are sent to the LLM during the same workflow turn, but raw tool results are not sent back as long-term chat history on later turns.*
+
 
 ## Architecture
 
@@ -70,30 +76,6 @@ React UI -> FastAPI -> ChatService -> WorkflowService -> LangGraph -> Model + To
 ```
 
 When `apps/web/dist` exists, the FastAPI app mounts it at `/ui`.
-
-## Workflow
-
-Echo uses one fixed user-facing workflow shape. Retrieval is not a separate conceptual step here; database search, web search, web fetch, skill loading, and workspace operations are all tool execution.
-
-```mermaid
-flowchart LR
-  Start([START]) --> Plan[plan]
-  Plan --> Tool[tool]
-  Plan --> Answer[answer]
-  Tool --> Think[think]
-  Think --> Tool
-  Think --> Answer
-  Answer --> End([END])
-```
-
-`plan`/`think` as **decision** nodes, they can be passed.
-`tool`/`answer` as **action** nodes, they are required in each reply.
-
-Streaming exposes three important event types:
-
-Long-term context comes only from persisted session history. Internal records are compacted before the next user turn so the model receives the useful reasoning trail without replaying raw tool bodies unnecessarily.
-
-*tool results are sent to the LLM during the same workflow turn, but raw tool results are not sent back as long-term chat history on later turns.*
 
 ## RAG Model
 
@@ -393,6 +375,6 @@ Before opening a pull request:
 4. Run `npm run build` in `apps/web` when frontend code changes.
 5. Never include local secrets or runtime state.
 
-## License
+## Licenses
 
 Echo is released under the [MIT License](LICENSE).
