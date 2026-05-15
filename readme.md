@@ -15,10 +15,10 @@
 - **OpenAI-compatible chat and embedding providers**, including local provider endpoints.
 - **React + TypeScript + Vite web UI** with session, workflow, database, model, runtime, and skill settings.
 - **FastAPI backend** with REST endpoints and streaming chat APIs.
-- **RAG pipeline with** per-database embedding model pairing.
-- - Chroma-backed vector storage under `db/`.
-- - Document upload and indexing for `.md`, `.txt`, and `.pdf`.
-- - Optional Marker-powered PDF conversion with PyPDF2 fallback.
+- **RAG pipeline with** per-database embedding model pairing:
+  - Selectable Chroma or FAISS vector storage under `db/`.
+  - Document upload and indexing for `.md`, `.txt`, and `.pdf`.
+  - Optional Marker-powered PDF conversion with PyPDF2 fallback.
 - Multiple **web search** engines support and screenshot mode for vision models.
 
 ## Workflow
@@ -61,7 +61,7 @@ Echo/
 │   └── tools/                # Tool implementations used by the workflow
 ├── memory/                   # Local session memory and workflow drafts
 ├── data/                     # Uploads and bounded workspace files
-├── db/                       # Chroma/vector database storage
+├── db/                       # Chroma/FAISS vector database storage
 ├── tests/
 ├── models.json               # Local model provider settings, ignored by Git
 ├── databases.json            # Local database registry, ignored by Git
@@ -84,6 +84,8 @@ Echo pairs every vector database with exactly one embedding model.
 This constraint is deliberate:
 
 - A database is created with one embedding model identity.
+- A database is created with one vector backend: `chroma` or `faiss`.
+- New databases use `settings.json` `default_database_backend` when no backend is specified.
 - Documents inserted into that database use that same embedding model.
 - Queries against that database use that same embedding model.
 - Embedding providers are always treated as external OpenAI-compatible APIs.
@@ -105,7 +107,7 @@ PDF loading uses `marker_single` when Marker is installed and enabled. If Marker
 | Backend | Python 3.12+, FastAPI, Pydantic, Uvicorn |
 | Workflow | LangGraph |
 | Models | OpenAI-compatible chat and embedding APIs |
-| Retrieval | ChromaDB, custom loaders/chunkers/assembler |
+| Retrieval | ChromaDB or FAISS, custom loaders/chunkers/assembler |
 | Frontend | React 19, TypeScript, Vite, native CSS |
 | Streaming | Server-Sent Events |
 
@@ -176,6 +178,12 @@ Supported chat wire APIs:
 - `chat_completions`
 - `responses`
 
+For local E5 embeddings, set an embedding model with `base_url: "local://e5"` and install the optional local embedding extra:
+
+```bash
+python -m pip install -e ".[local-embeddings]"
+```
+
 You can also edit these settings from the web UI after the app starts.
 
 ### 3. Start the backend
@@ -238,6 +246,7 @@ Runtime settings:
   "chunk_overlap": 50,
   "max_retrieve_rounds": 10,
   "use_marker_pdf_loader": true,
+  "default_database_backend": "chroma",
   "web_search_backend": "auto",
   "web_fetch_screenshot_mode": false,
   "enabled_skills": ["search", "workspace-files"],
@@ -252,6 +261,11 @@ Search backends:
 - `bing`
 - `baidu`
 
+Database backends:
+
+- `chroma`
+- `faiss`
+
 `web_fetch_screenshot_mode` requires Playwright browser installation:
 
 ```bash
@@ -260,7 +274,7 @@ python -m playwright install chromium
 
 ### `databases.json`
 
-`databases.json` is created and maintained by the backend. It stores the active database selection plus each database's paired embedding model identity.
+`databases.json` is created and maintained by the backend. It stores the active database selection plus each database's paired embedding model identity and vector backend (`chroma` by default, or `faiss` for FAISS-backed databases).
 
 You normally manage this from the UI or API instead of editing it manually.
 

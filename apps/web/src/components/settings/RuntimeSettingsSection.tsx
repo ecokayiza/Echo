@@ -52,6 +52,22 @@ export function RuntimeSettingsSection({ busy, settings, onUpdate }: RuntimeSett
                 value={String(settings.chunk_overlap)}
               />
             </Field>
+            <Field htmlFor="runtime-default-database-backend" label="Default Database Backend">
+              <select
+                disabled={busy}
+                id="runtime-default-database-backend"
+                onChange={(event) => {
+                  onUpdate(
+                    "default_database_backend",
+                    event.target.value as AppSettingsDocument["default_database_backend"]
+                  );
+                }}
+                value={settings.default_database_backend}
+              >
+                <option value="chroma">Chroma</option>
+                <option value="faiss">FAISS</option>
+              </select>
+            </Field>
           </div>
 
           <label className="settings-toggle settings-toggle--switch">

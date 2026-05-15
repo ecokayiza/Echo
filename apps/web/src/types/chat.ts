@@ -53,6 +53,7 @@ export interface DatabaseRecord {
   id: string;
   name: string;
   collection_name: string;
+  backend: "chroma" | "faiss";
   embedding_model_name: string;
   document_count: number;
   created_at: string;
@@ -179,6 +180,7 @@ export interface AppSettingsDocument {
   chunk_overlap: number;
   max_retrieve_rounds: number;
   use_marker_pdf_loader: boolean;
+  default_database_backend: "chroma" | "faiss";
   web_search_backend: "auto" | "duckduckgo" | "bing" | "baidu";
   web_fetch_screenshot_mode: boolean;
 }

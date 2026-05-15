@@ -19,6 +19,7 @@ from openai import (
 from echo.chat.registry import EmbeddingModelSettings, get_active_embedding_model_settings, normalize_embedding_model_settings
 from echo.settings import Config
 from .errors import EmbeddingError
+from .local_e5_embedder import DEFAULT_LOCAL_E5_MODEL, LocalE5Embedder, is_local_embedding_base_url
 
 DEFAULT_QUERY_INSTRUCTION = "Given a user query, retrieve relevant passages that answer the query."
 MAX_BATCH_SIZE_PATTERN = re.compile(r"batch size is invalid, it should not be larger than (\d+)", re.IGNORECASE)
@@ -45,6 +46,18 @@ class OpenAICompatibleEmbedder:
             resolved = normalize_embedding_model_settings(settings) if settings is not None else get_active_embedding_model_settings()
         except ValueError as exc:
             raise EmbeddingError(str(exc)) from exc
+
+        if is_local_embedding_base_url(resolved.base_url):
+            local_model = resolved.model
+            if not local_model or local_model == Config.DEFAULT_EMBEDDING_MODEL:
+                local_model = DEFAULT_LOCAL_E5_MODEL
+            return LocalE5Embedder.embed(
+                texts,
+                model=local_model,
+                input_type=input_type,
+                batch_size=resolved.batch_size,
+                progress_callback=progress_callback,
+            )
 
         prepared = [
             _prepare_input_text(text, input_type=input_type, instruction=instruction)

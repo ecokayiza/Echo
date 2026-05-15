@@ -71,6 +71,7 @@ class DatabaseSummaryResponse(BaseModel):
     id: str
     name: str
     collection_name: str
+    backend: str
     embedding_model_name: str
     document_count: int
     created_at: str
@@ -135,6 +136,7 @@ class UpdateSystemPromptRequest(BaseModel):
 class CreateDatabaseRequest(BaseModel):
     name: str | None = None
     embedding_model_name: str | None = None
+    backend: str | None = None
 
 
 class UpdateDatabaseRequest(BaseModel):
@@ -220,6 +222,7 @@ class AppSettingsRequest(BaseModel):
     chunk_overlap: int = Field(default=Config.CHUNK_OVERLAP, ge=0)
     max_retrieve_rounds: int = Field(default=10, ge=1)
     use_marker_pdf_loader: bool = True
+    default_database_backend: str = "chroma"
     web_search_backend: str = "auto"
     web_fetch_screenshot_mode: bool = False
 
@@ -233,6 +236,7 @@ class AppSettingsRequest(BaseModel):
             chunk_overlap=settings.chunk_overlap,
             max_retrieve_rounds=settings.max_retrieve_rounds,
             use_marker_pdf_loader=settings.use_marker_pdf_loader,
+            default_database_backend=settings.default_database_backend,
             web_search_backend=settings.web_search_backend,
             web_fetch_screenshot_mode=settings.web_fetch_screenshot_mode,
         )
@@ -367,6 +371,7 @@ def create_app(chat_service: ChatService | None = None):
             chunk_overlap=payload.chunk_overlap,
             max_retrieve_rounds=payload.max_retrieve_rounds,
             use_marker_pdf_loader=payload.use_marker_pdf_loader,
+            default_database_backend=payload.default_database_backend,
             web_search_backend=payload.web_search_backend,
             web_fetch_screenshot_mode=payload.web_fetch_screenshot_mode,
             enabled_skills=current.enabled_skills,
@@ -395,8 +400,14 @@ def create_app(chat_service: ChatService | None = None):
     @app.post("/api/databases", response_model=DatabaseStateResponse)
     def create_database(payload: CreateDatabaseRequest | None = None):
         request = payload or CreateDatabaseRequest()
+        backend = request.backend or load_app_settings().default_database_backend
         try:
-            create_database_settings(name=request.name, embedding_model_name=request.embedding_model_name, select=True)
+            create_database_settings(
+                name=request.name,
+                embedding_model_name=request.embedding_model_name,
+                backend=backend,
+                select=True,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return DatabaseStateResponse(**_database_state_payload())
@@ -427,7 +438,7 @@ def create_app(chat_service: ChatService | None = None):
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if database is not None:
             try:
-                VectorDatabase(collection_name=database.collection_name).delete_collection()
+                _vector_database_for(database).delete_collection()
             except Exception:
                 pass
         return DatabaseStateResponse(**_database_state_payload())
@@ -445,8 +456,9 @@ def create_app(chat_service: ChatService | None = None):
         if not files:
             raise HTTPException(status_code=400, detail="Select at least one file to upload.")
 
+        vector_db = _vector_database_for(database)
         assembler = Assembler(
-            VectorDatabase(collection_name=database.collection_name),
+            vector_db,
             DataLoaderFactory(),
             ChunkerFactory(),
             OpenAICompatibleEmbedder(),
@@ -457,7 +469,7 @@ def create_app(chat_service: ChatService | None = None):
             for upload in files:
                 saved_path = await _save_uploaded_document(upload, database.collection_name)
                 if skip_existing and _database_has_uploaded_file(
-                    VectorDatabase(collection_name=database.collection_name),
+                    vector_db,
                     str(saved_path),
                 ):
                     continue
@@ -517,7 +529,7 @@ def create_app(chat_service: ChatService | None = None):
         if database is None:
             raise HTTPException(status_code=404, detail="Database not found.")
         try:
-            return VectorDatabase(collection_name=database.collection_name).list_document_summaries()
+            return _vector_database_for(database).list_document_summaries()
         except Exception:
             return []
 
@@ -528,7 +540,7 @@ def create_app(chat_service: ChatService | None = None):
         if database is None:
             raise HTTPException(status_code=404, detail="Database not found.")
 
-        vector_db = VectorDatabase(collection_name=database.collection_name)
+        vector_db = _vector_database_for(database)
         summaries = vector_db.list_document_summaries()
         target = next((item for item in summaries if item.get("id") == document_id), None)
         if target is None:
@@ -554,7 +566,7 @@ def create_app(chat_service: ChatService | None = None):
         if database is None:
             raise HTTPException(status_code=404, detail="Database not found.")
 
-        vector_db = VectorDatabase(collection_name=database.collection_name)
+        vector_db = _vector_database_for(database)
         summaries = vector_db.list_document_summaries()
         target = next((item for item in summaries if item.get("id") == document_id), None)
         if target is None:
@@ -679,7 +691,7 @@ def _database_state_payload() -> dict[str, Any]:
     databases = []
     for database in document.databases:
         try:
-            count = VectorDatabase(collection_name=database.collection_name).file_count()
+            count = _vector_database_for(database).file_count()
         except Exception:
             count = 0
         try:
@@ -691,6 +703,7 @@ def _database_state_payload() -> dict[str, Any]:
                 "id": database.id,
                 "name": database.name,
                 "collection_name": database.collection_name,
+                "backend": database.backend,
                 "embedding_model_name": embedding_model_name,
                 "document_count": count,
                 "created_at": database.created_at,
@@ -698,6 +711,10 @@ def _database_state_payload() -> dict[str, Any]:
             }
         )
     return {"active_database_id": document.active_database_id, "databases": databases}
+
+
+def _vector_database_for(database) -> VectorDatabase:
+    return VectorDatabase(collection_name=database.collection_name, backend=database.backend)
 
 
 def _sanitize_upload_filename(filename: str) -> str:
@@ -851,7 +868,7 @@ def _process_database_upload_job(
     saved_paths: list[str],
     skip_existing: bool,
 ):
-    vector_db = VectorDatabase(collection_name=database.collection_name)
+    vector_db = _vector_database_for(database)
     assembler = Assembler(
         vector_db,
         DataLoaderFactory(),

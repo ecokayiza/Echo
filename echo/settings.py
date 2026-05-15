@@ -50,6 +50,7 @@ class AppSettings:
     chunk_overlap: int = Config.CHUNK_OVERLAP
     max_retrieve_rounds: int = 10
     use_marker_pdf_loader: bool = True
+    default_database_backend: str = "chroma"
     web_search_backend: str = "auto"
     web_fetch_screenshot_mode: bool = False
     enabled_skills: list[str] | None = None
@@ -66,6 +67,7 @@ def normalize_app_settings(payload: dict | None = None) -> AppSettings:
         chunk_overlap=chunk_overlap,
         max_retrieve_rounds=_positive_int(data.get("max_retrieve_rounds"), 10),
         use_marker_pdf_loader=_bool(data.get("use_marker_pdf_loader"), True),
+        default_database_backend=_database_backend(data.get("default_database_backend")),
         web_search_backend=_web_search_backend(data.get("web_search_backend")),
         web_fetch_screenshot_mode=_bool(data.get("web_fetch_screenshot_mode"), False),
         enabled_skills=_optional_skill_list(data.get("enabled_skills")),
@@ -118,6 +120,14 @@ def _web_search_backend(value: object) -> str:
     aliases = {"ddg": "duckduckgo", "duck": "duckduckgo", "baidu_search": "baidu", "bing_rss": "bing"}
     resolved = aliases.get(cleaned, cleaned)
     return resolved if resolved in {"auto", "duckduckgo", "bing", "baidu"} else "auto"
+
+
+def _database_backend(value: object) -> str:
+    """Normalize the default vector database backend."""
+    if not isinstance(value, str):
+        return "chroma"
+    cleaned = value.strip().lower()
+    return cleaned if cleaned in {"chroma", "faiss"} else "chroma"
 
 
 def _optional_skill_list(value: object) -> list[str] | None:

@@ -123,10 +123,11 @@ export function WorkspaceScreen({ app }: WorkspaceScreenProps) {
         activeDatabaseId={database.activeDatabaseId}
         busy={state.busy}
         databases={database.databases}
+        defaultBackend={settings.defaultDatabaseBackend}
         embeddingModelNames={settings.embeddingModelNames}
         onClose={database.actions.closeSettings}
-        onCreate={(name, embeddingModelName) => {
-          void database.actions.create(name, embeddingModelName);
+        onCreate={(name, embeddingModelName, backend) => {
+          void database.actions.create(name, embeddingModelName, backend);
         }}
         onDelete={database.actions.openDeleteDatabaseDialog}
         onRename={(targetDatabase, name) => {

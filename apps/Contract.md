@@ -145,12 +145,15 @@
   "id": "db-123",
   "name": "Local Docs",
   "collection_name": "db_local_docs_ab12cd34",
+  "backend": "chroma",
   "embedding_model_name": "Local Qwen3 Embedding",
   "document_count": 42,
   "created_at": "2026-04-11T11:00:00+00:00",
   "updated_at": "2026-04-11T11:05:00+00:00"
 }
 ```
+
+`backend` 允许：`"chroma"` 或 `"faiss"`。
 
 ### `DatabaseState`
 
@@ -160,6 +163,22 @@
   "databases": []
 }
 ```
+
+### `AppSettingsDocument`
+
+```json
+{
+  "chunk_size": 1000,
+  "chunk_overlap": 200,
+  "max_retrieve_rounds": 10,
+  "use_marker_pdf_loader": true,
+  "default_database_backend": "chroma",
+  "web_search_backend": "auto",
+  "web_fetch_screenshot_mode": false
+}
+```
+
+`default_database_backend` 允许：`"chroma"` 或 `"faiss"`。当创建 database 的请求没有传 `backend` 时，后端使用这个默认值。
 
 ### `WorkflowNodeStatus`
 
@@ -295,6 +314,18 @@ Embedding provider 本身不属于 `apps/web <-> apps/api` 契约。
 
 完整覆盖保存根目录 `models.json`。
 
+### `GET /api/app-settings`
+
+响应：
+
+- `AppSettingsDocument`
+
+### `PUT /api/app-settings`
+
+请求与响应：
+
+- `AppSettingsDocument`
+
 ### `GET /api/databases`
 
 响应：
@@ -308,9 +339,12 @@ Embedding provider 本身不属于 `apps/web <-> apps/api` 契约。
 ```json
 {
   "name": "Local Docs",
-  "embedding_model_name": "Local Qwen3 Embedding"
+  "embedding_model_name": "Local Qwen3 Embedding",
+  "backend": "chroma"
 }
 ```
+
+`backend` 可省略；省略时使用 `settings.json` 里的 `default_database_backend`。`embedding_model_name` 也可省略，后端会使用当前 active embedding model。
 
 响应：
 

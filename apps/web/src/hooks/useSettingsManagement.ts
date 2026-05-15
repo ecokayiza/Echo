@@ -45,6 +45,7 @@ const defaultAppSettings: AppSettingsDocument = {
   chunk_overlap: 200,
   max_retrieve_rounds: 10,
   use_marker_pdf_loader: true,
+  default_database_backend: "chroma",
   web_search_backend: "auto",
   web_fetch_screenshot_mode: false,
 };
@@ -412,6 +413,7 @@ function normalizeAppSettings(settings: Partial<AppSettingsDocument> | null | un
       typeof settings?.use_marker_pdf_loader === "boolean"
         ? settings.use_marker_pdf_loader
         : defaultAppSettings.use_marker_pdf_loader,
+    default_database_backend: normalizeDatabaseBackend(settings?.default_database_backend),
     web_search_backend: normalizeWebSearchBackend(settings?.web_search_backend),
     web_fetch_screenshot_mode:
       typeof settings?.web_fetch_screenshot_mode === "boolean"
@@ -422,6 +424,10 @@ function normalizeAppSettings(settings: Partial<AppSettingsDocument> | null | un
 
 function normalizeWebSearchBackend(value: unknown): AppSettingsDocument["web_search_backend"] {
   return value === "duckduckgo" || value === "bing" || value === "baidu" || value === "auto" ? value : "auto";
+}
+
+function normalizeDatabaseBackend(value: unknown): AppSettingsDocument["default_database_backend"] {
+  return value === "faiss" || value === "chroma" ? value : "chroma";
 }
 
 function positiveInteger(value: unknown, fallback: number) {

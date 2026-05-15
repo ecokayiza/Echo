@@ -13,6 +13,7 @@ from echo.chat.registry import (
     resolve_embedding_model_settings,
 )
 from echo.settings import Config
+from .vector_backends import DEFAULT_VECTOR_BACKEND, normalize_vector_backend
 
 
 @dataclass(frozen=True)
@@ -22,6 +23,7 @@ class DatabaseSettings:
     id: str
     name: str
     collection_name: str
+    backend: str
     embedding_model_name: str
     embedding_model_key: str
     created_at: str
@@ -50,6 +52,7 @@ def normalize_database_settings(settings: DatabaseSettings | dict | None = None)
         id=_trim(payload.get("id")) or str(uuid4()),
         name=name,
         collection_name=collection_name,
+        backend=normalize_vector_backend(payload.get("backend")),
         embedding_model_name=embedding.name,
         embedding_model_key=_trim(payload.get("embedding_model_key")) or embedding_model_key(embedding),
         created_at=timestamp,
@@ -116,9 +119,11 @@ def create_database_settings(
     *,
     name: str | None = None,
     embedding_model_name: str | None = None,
+    backend: str | None = None,
     select: bool = True,
 ) -> DatabaseSettingsDocument:
     """Create one new database paired to an embedding model."""
+    resolved_backend = normalize_vector_backend(backend)
     embedding = (
         resolve_embedding_model_settings(name=embedding_model_name, required=False)
         if embedding_model_name
@@ -132,6 +137,7 @@ def create_database_settings(
             "name": name or _default_name(embedding.name),
             "embedding_model_name": embedding.name,
             "embedding_model_key": embedding_model_key(embedding),
+            "backend": resolved_backend,
             "collection_name": _collection_name(name or _default_name(embedding.name), str(uuid4())[:8]),
         }
     )
@@ -204,6 +210,7 @@ def _default_database_settings() -> DatabaseSettings:
             "id": str(uuid4()),
             "name": name,
             "collection_name": _collection_name(name, str(uuid4())[:8]),
+            "backend": DEFAULT_VECTOR_BACKEND,
             "embedding_model_name": embedding.name,
             "embedding_model_key": embedding_model_key(embedding),
         }

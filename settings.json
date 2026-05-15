@@ -3,8 +3,9 @@
   "chunk_overlap": 50,
   "max_retrieve_rounds": 10,
   "use_marker_pdf_loader": true,
+  "default_database_backend": "chroma",
   "web_search_backend": "auto",
-  "web_fetch_screenshot_mode": true,
+  "web_fetch_screenshot_mode": false,
   "enabled_skills": [
     "search",
     "workspace-files"

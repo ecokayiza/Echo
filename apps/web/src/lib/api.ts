@@ -79,7 +79,7 @@ export const api = {
   listDatabases() {
     return requestJson<DatabaseState>("/api/databases");
   },
-  createDatabase(payload?: { name?: string | null; embedding_model_name?: string | null }) {
+  createDatabase(payload?: { name?: string | null; embedding_model_name?: string | null; backend?: "chroma" | "faiss" | null }) {
     return requestJson<DatabaseState>("/api/databases", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

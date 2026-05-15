@@ -23,7 +23,7 @@ def database_search(query: str, top_k: int = 4) -> dict[str, Any]:
         database = database_registry.get_active_database_settings()
         embedding_settings = database_registry.resolve_database_embedding_settings(database)
         query_embedding = embedder.OpenAICompatibleEmbedder.embed_query(cleaned, settings=embedding_settings)
-        results = vector_database.VectorDatabase(collection_name=database.collection_name).query_with_vector(
+        results = vector_database.VectorDatabase(collection_name=database.collection_name, backend=database.backend).query_with_vector(
             query_embedding,
             n_results=limit,
         )

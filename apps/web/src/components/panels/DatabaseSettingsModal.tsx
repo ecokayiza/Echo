@@ -17,10 +17,11 @@ interface DatabaseSettingsModalProps {
   activeDatabaseId: string | null;
   busy: boolean;
   databases: DatabaseRecord[];
+  defaultBackend: DatabaseRecord["backend"];
   embeddingModelNames: string[];
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, embeddingModelName: string) => void;
+  onCreate: (name: string, embeddingModelName: string, backend: DatabaseRecord["backend"]) => void;
   onDelete: (database: DatabaseRecord) => void;
   onRename: (database: DatabaseRecord, name: string) => void;
   onSelect: (databaseId: string) => void;
@@ -32,6 +33,7 @@ export function DatabaseSettingsModal({
   activeDatabaseId,
   busy,
   databases,
+  defaultBackend,
   embeddingModelNames,
   open,
   onClose,
@@ -41,6 +43,7 @@ export function DatabaseSettingsModal({
   onSelect,
 }: DatabaseSettingsModalProps) {
   const [nameDraft, setNameDraft] = useState("");
+  const [backend, setBackend] = useState<DatabaseRecord["backend"]>(defaultBackend);
   const [embeddingModelName, setEmbeddingModelName] = useState(embeddingModelNames[0] ?? "");
   const [editingDatabaseId, setEditingDatabaseId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -52,8 +55,15 @@ export function DatabaseSettingsModal({
       setEditingDatabaseId(null);
       setRenameDraft("");
       setIsCreating(false);
+      setBackend(defaultBackend);
     }
-  }, [open]);
+  }, [defaultBackend, open]);
+
+  useEffect(() => {
+    if (!isCreating) {
+      setBackend(defaultBackend);
+    }
+  }, [defaultBackend, isCreating]);
 
   useEffect(() => {
     if (!embeddingModelNames.includes(embeddingModelName)) {
@@ -66,8 +76,9 @@ export function DatabaseSettingsModal({
     if (!nextName || !embeddingModelName) {
       return;
     }
-    onCreate(nextName, embeddingModelName);
+    onCreate(nextName, embeddingModelName, backend);
     setNameDraft("");
+    setBackend(defaultBackend);
   }
 
   function onRenameKeyDown(database: DatabaseRecord, event: KeyboardEvent<HTMLInputElement>) {
@@ -237,6 +248,9 @@ export function DatabaseSettingsModal({
                 <span className="database-settings-tile__model" title={database.embedding_model_name}>
                   {database.embedding_model_name}
                 </span>
+                <span className="database-settings-tile__model">
+                  {formatDatabaseBackend(database.backend)}
+                </span>
               </div>
             </article>
           );
@@ -309,6 +323,20 @@ export function DatabaseSettingsModal({
               )}
             </select>
           </Field>
+
+          <Field htmlFor="database-create-backend" label="Backend">
+            <select
+              disabled={busy}
+              id="database-create-backend"
+              onChange={(event) => {
+                setBackend(event.target.value as DatabaseRecord["backend"]);
+              }}
+              value={backend}
+            >
+              <option value="chroma">Chroma</option>
+              <option value="faiss">FAISS</option>
+            </select>
+          </Field>
         </div>
       </Modal>
     </>
@@ -321,4 +349,8 @@ function formatDatabaseDate(value: string) {
     return "未知时间";
   }
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function formatDatabaseBackend(backend: DatabaseRecord["backend"]) {
+  return backend === "faiss" ? "FAISS" : "Chroma";
 }

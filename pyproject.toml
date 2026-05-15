@@ -14,6 +14,7 @@ classifiers = [
 ]
 dependencies = [
     "chromadb",
+    "faiss-cpu",
     "fastapi",
     "langgraph",
     "langchain-text-splitters",
@@ -26,6 +27,12 @@ dependencies = [
     "PyYAML",
     "tqdm",
     "uvicorn",
+]
+
+[project.optional-dependencies]
+local-embeddings = [
+    "sentence-transformers",
+    "torch",
 ]
 
 [tool.setuptools.packages.find]

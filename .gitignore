@@ -22,4 +22,5 @@ models.json
 databases.json
 echo.egg-info/
 uv.lock
-tests
+tests/unit
+tests/eval/data

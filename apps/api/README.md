@@ -112,6 +112,8 @@ Web UI 用法：
 database 和 embedding model 是一对一配对：
 
 - 一个 database 只绑定一个 embedding model
+- 一个 database 选择一个 vector backend：`chroma` 或 `faiss`
+- 创建 database 时如果没有传 `backend`，后端使用 `settings.json` 的 `default_database_backend`
 - 该库的入库和检索都必须使用这个配对模型
 - 检索时 query embedding 也由这个模型生成
 
@@ -128,10 +130,19 @@ database 和 embedding model 是一对一配对：
 - `id`
 - `name`
 - `collection_name`
+- `backend`
 - `embedding_model_name`
 - `document_count`
 - `created_at`
 - `updated_at`
+
+`POST /api/databases` 可传：
+
+- `name`
+- `embedding_model_name`
+- `backend`: `chroma` 或 `faiss`
+
+运行时设置接口 `GET /api/app-settings` / `PUT /api/app-settings` 包含 `default_database_backend`，用于控制新 database 的默认 vector backend。
 
 ## Message 可变更边界
 

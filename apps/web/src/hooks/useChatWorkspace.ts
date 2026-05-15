@@ -731,7 +731,7 @@ export function useChatWorkspace() {
     );
   }
 
-  async function createDatabase(name: string, embeddingModelName: string) {
+  async function createDatabase(name: string, embeddingModelName: string, backend?: DatabaseRecord["backend"]) {
     const cleanedName = name.trim();
     if (!cleanedName) {
       dispatch({ type: "status", text: "Database name cannot be empty.", tone: "error", liveLabel: "Error" });
@@ -741,7 +741,7 @@ export function useChatWorkspace() {
     await withBusy(
       "Creating database...",
       async () => {
-        const payload = await api.createDatabase({ name: cleanedName, embedding_model_name: embeddingModelName });
+        const payload = await api.createDatabase({ name: cleanedName, embedding_model_name: embeddingModelName, backend });
         await syncDatabaseState(payload);
         dispatch({ type: "status", text: "Database created.", tone: "success", liveLabel: "Ready" });
       },
@@ -1272,6 +1272,7 @@ export function useChatWorkspace() {
     },
     settings: {
       activeModelName: settings.activeModelName,
+      defaultDatabaseBackend: settings.persisted.appSettings.default_database_backend,
       embeddingModelNames: settings.embeddingModelNames,
       modelNames: settings.modelNames,
       pageOpen: settings.pageOpen,

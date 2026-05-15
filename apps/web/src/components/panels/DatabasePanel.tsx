@@ -124,7 +124,9 @@ export function DatabasePanel({
               </strong>
               <span className="database-card__count">{formatNumber(activeDatabase.document_count)} files</span>
             </div>
-            <p className="database-card__meta">{activeDatabase.embedding_model_name}</p>
+            <p className="database-card__meta">
+              {activeDatabase.embedding_model_name} · {formatDatabaseBackend(activeDatabase.backend)}
+            </p>
           </div>
 
           <section className="database-documents" aria-label="Database files">
@@ -319,4 +321,8 @@ export function DatabasePanel({
       )}
     </SectionCard>
   );
+}
+
+function formatDatabaseBackend(backend: DatabaseRecord["backend"]) {
+  return backend === "faiss" ? "FAISS" : "Chroma";
 }
