@@ -178,11 +178,14 @@ Supported chat wire APIs:
 - `chat_completions`
 - `responses`
 
-For local E5 embeddings, set an embedding model with `base_url: "local://e5"` and install the optional local embedding extra:
+For local E5 embeddings, install the optional local embedding extra and manually launch the standalone OpenAI-compatible service:
 
 ```bash
 python -m pip install -e ".[local-embeddings]"
+python -m mcp_server.local_e5_embedder --host 127.0.0.1 --port 8092 --model intfloat/e5-base-v2
 ```
+
+Then configure an embedding model with `base_url: "http://127.0.0.1:8092/v1"`, `api_key: "local-e5-service"`, and `model: "intfloat/e5-base-v2"`.
 
 You can also edit these settings from the web UI after the app starts.
 

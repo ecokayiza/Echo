@@ -14,8 +14,7 @@ __pycache__/
 .venv/
 apps/web/node_modules/
 apps/desktop/src-tauri/target/
-memory/chat_sessions/*
-memory/artifacts/*
+memory
 apps/web/node_modules/
 apps/web/dist/
 models.json
@@ -24,3 +23,4 @@ echo.egg-info/
 uv.lock
 tests/unit
 tests/eval/data
+latex/

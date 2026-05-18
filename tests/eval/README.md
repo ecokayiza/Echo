@@ -54,6 +54,14 @@ python tests/eval/flashrag_hotpotqa_eval.py ^
 
 Run FlashRAG prebuilt-index evaluation:
 
+First launch the local E5 embedding service manually:
+
+```bash
+python -m mcp_server.local_e5_embedder --host 127.0.0.1 --port 8092 --model intfloat/e5-base-v2
+```
+
+Then run the eval against the prebuilt FAISS index:
+
 ```bash
 python tests/eval/flashrag_hotpotqa_eval.py ^
   --retriever flashrag-index ^
@@ -61,6 +69,7 @@ python tests/eval/flashrag_hotpotqa_eval.py ^
   --corpus-path D:\Datasets\FlashRAG\wiki18_100w.jsonl ^
   --flashrag-index-path D:\Datasets\FlashRAG\wiki18_100w_e5_index\index.faiss ^
   --hotpotqa-path tests/eval/hotpotqa/dev.jsonl ^
+  --local-e5-base-url http://127.0.0.1:8092/v1 ^
   --local-e5-model intfloat/e5-base-v2
 ```
 

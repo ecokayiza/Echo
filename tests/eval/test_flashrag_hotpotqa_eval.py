@@ -173,9 +173,9 @@ class FlashRAGHotpotQAEvalTests(unittest.TestCase):
             with patch("flashrag_hotpotqa_eval._load_faiss_module", return_value=FakeFaiss()):
                 with patch("flashrag_hotpotqa_eval._read_faiss_index", return_value=FakeIndex()):
                     with patch(
-                        "mcp_server.rag.local_e5_embedder.LocalE5Embedder.embed_query",
+                        "mcp_server.rag.embedder.OpenAICompatibleEmbedder.embed_query",
                         return_value=[0.1, 0.2, 0.3],
-                    ):
+                    ) as embed_query:
                         retriever = flashrag_hotpotqa_eval.FlashRAGPrebuiltIndexRetriever(
                             index_path=index_path,
                             corpus_path=corpus_path,
@@ -191,6 +191,7 @@ class FlashRAGHotpotQAEvalTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["title"], "Alpha")
         self.assertAlmostEqual(result["items"][0]["distance"], 0.1)
         self.assertEqual(result["items"][0]["database_name"], "wiki18_100w")
+        self.assertEqual(embed_query.call_args.kwargs["settings"]["base_url"], "http://127.0.0.1:8092/v1")
 
     def test_index_requires_manual_corpus_path(self):
         with self.assertRaises(SystemExit) as context:

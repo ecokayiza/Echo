@@ -18,6 +18,8 @@ FLASHRAG_ID_NAMESPACE = "RUC-NLPIR/FlashRAG_datasets"
 MANUAL_CORPUS_URL = "https://www.modelscope.cn/datasets/hhjinjiajie/FlashRAG_Dataset/tree/master/retrieval_corpus"
 WIKI_DPR_FILENAME = "retrieval-corpus/wiki18_100w.zip"
 DEFAULT_LOCAL_E5_MODEL = "intfloat/e5-base-v2"
+DEFAULT_LOCAL_E5_BASE_URL = "http://127.0.0.1:8092/v1"
+DEFAULT_LOCAL_E5_API_KEY = "local-e5-service"
 DEFAULT_HOTPOTQA_DIR = Path(__file__).resolve().parent / "hotpotqa"
 HOTPOTQA_SPLIT_FILENAMES = {
     "dev": "hotpotqa/dev.jsonl",
@@ -96,6 +98,8 @@ class FlashRAGPrebuiltIndexRetriever:
         corpus_path: Path,
         offset_path: Path,
         local_e5_model: str = DEFAULT_LOCAL_E5_MODEL,
+        local_e5_base_url: str = DEFAULT_LOCAL_E5_BASE_URL,
+        local_e5_api_key: str = DEFAULT_LOCAL_E5_API_KEY,
         faiss_mmap: bool = True,
         database_name: str = "wiki18_100w",
     ):
@@ -103,6 +107,8 @@ class FlashRAGPrebuiltIndexRetriever:
         self.corpus_path = corpus_path
         self.offset_path = offset_path
         self.local_e5_model = local_e5_model
+        self.local_e5_base_url = local_e5_base_url
+        self.local_e5_api_key = local_e5_api_key
         self.database_name = database_name
         self.faiss = _load_faiss_module()
         self.index = _read_faiss_index(self.faiss, index_path, faiss_mmap=faiss_mmap)
@@ -112,11 +118,19 @@ class FlashRAGPrebuiltIndexRetriever:
         self.docstore.close()
 
     def retrieve(self, question: str, top_k: int) -> dict[str, Any]:
-        from mcp_server.rag.local_e5_embedder import LocalE5Embedder
+        from mcp_server.rag.embedder import OpenAICompatibleEmbedder
 
         import numpy as np
 
-        query_embedding = LocalE5Embedder.embed_query(question, model=self.local_e5_model)
+        query_embedding = OpenAICompatibleEmbedder.embed_query(
+            question,
+            settings={
+                "name": "Local E5 FlashRAG",
+                "model": self.local_e5_model,
+                "api_key": self.local_e5_api_key,
+                "base_url": self.local_e5_base_url,
+            },
+        )
         query = np.asarray([query_embedding], dtype="float32")
         self.faiss.normalize_L2(query)
         scores, ids = self.index.search(query, max(int(top_k), 1))
@@ -580,8 +594,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--local-e5-model",
         default=DEFAULT_LOCAL_E5_MODEL,
-        help="Local E5 model name used for flashrag-index retrieval.",
+        help="Model name served by the manually launched local E5 embedding service.",
     )
+    parser.add_argument("--local-e5-base-url", default=DEFAULT_LOCAL_E5_BASE_URL)
+    parser.add_argument("--local-e5-api-key", default=DEFAULT_LOCAL_E5_API_KEY)
     parser.add_argument("--faiss-mmap", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--summary-path",
@@ -626,6 +642,8 @@ def main(argv: list[str] | None = None) -> int:
             corpus_path=corpus_path,
             offset_path=offset_path,
             local_e5_model=args.local_e5_model,
+            local_e5_base_url=args.local_e5_base_url,
+            local_e5_api_key=args.local_e5_api_key,
             faiss_mmap=args.faiss_mmap,
             database_name=args.database_name,
         )

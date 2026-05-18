@@ -19,10 +19,10 @@ from openai import (
 from echo.chat.registry import EmbeddingModelSettings, get_active_embedding_model_settings, normalize_embedding_model_settings
 from echo.settings import Config
 from .errors import EmbeddingError
-from .local_e5_embedder import DEFAULT_LOCAL_E5_MODEL, LocalE5Embedder, is_local_embedding_base_url
 
 DEFAULT_QUERY_INSTRUCTION = "Given a user query, retrieve relevant passages that answer the query."
 MAX_BATCH_SIZE_PATTERN = re.compile(r"batch size is invalid, it should not be larger than (\d+)", re.IGNORECASE)
+EMBEDDING_REQUEST_TIMEOUT_SECONDS = 30.0
 
 
 class OpenAICompatibleEmbedder:
@@ -47,20 +47,8 @@ class OpenAICompatibleEmbedder:
         except ValueError as exc:
             raise EmbeddingError(str(exc)) from exc
 
-        if is_local_embedding_base_url(resolved.base_url):
-            local_model = resolved.model
-            if not local_model or local_model == Config.DEFAULT_EMBEDDING_MODEL:
-                local_model = DEFAULT_LOCAL_E5_MODEL
-            return LocalE5Embedder.embed(
-                texts,
-                model=local_model,
-                input_type=input_type,
-                batch_size=resolved.batch_size,
-                progress_callback=progress_callback,
-            )
-
         prepared = [
-            _prepare_input_text(text, input_type=input_type, instruction=instruction)
+            _prepare_input_text(text, settings=resolved, input_type=input_type, instruction=instruction)
             for text in texts
             if str(text).strip()
         ]
@@ -75,7 +63,12 @@ class OpenAICompatibleEmbedder:
                 f"Missing embedding model base_url. Update '{Config.MODELS_PATH.name}' with a valid OpenAI-compatible endpoint."
             )
 
-        client = OpenAI(api_key=resolved.api_key, base_url=resolved.base_url)
+        client = OpenAI(
+            api_key=resolved.api_key,
+            base_url=resolved.base_url,
+            timeout=EMBEDDING_REQUEST_TIMEOUT_SECONDS,
+            max_retries=0,
+        )
         request_kwargs = {"model": resolved.model, "input": prepared}
         if dimensions is not None:
             request_kwargs["dimensions"] = dimensions
@@ -137,15 +130,30 @@ class OpenAICompatibleEmbedder:
         return embeddings[0]
 
 
-def _prepare_input_text(text: str, *, input_type: str, instruction: str | None) -> str:
+def _prepare_input_text(
+    text: str,
+    *,
+    settings: EmbeddingModelSettings,
+    input_type: str,
+    instruction: str | None,
+) -> str:
     """Format one text payload before sending it to the embedding model."""
     cleaned = str(text or "").strip()
     if not cleaned:
         return ""
+    if _is_e5_embedding_model(settings):
+        prefix = "query: " if input_type == "query" else "passage: "
+        return f"{prefix}{cleaned}"
     if input_type == "query":
         task = (instruction or DEFAULT_QUERY_INSTRUCTION).strip()
         return f"Instruct: {task}\nQuery: {cleaned}"
     return cleaned
+
+
+def _is_e5_embedding_model(settings: EmbeddingModelSettings) -> bool:
+    model = (settings.model or "").lower()
+    base_url = (settings.base_url or "").lower()
+    return "e5" in model or "e5" in base_url
 
 
 def _extract_embeddings(response) -> list[list[float]]:

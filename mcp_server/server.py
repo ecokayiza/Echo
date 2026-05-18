@@ -13,6 +13,22 @@ from .tools.registry import TOOL_FUNCTIONS
 
 mcp = FastMCP("Echo Tools", log_level="ERROR")
 
+
+def _prewarm_native_vector_libraries():
+    """Import native vector libraries before MCP runs sync tools in worker threads."""
+    try:
+        with redirect_stdout(sys.stderr):
+            import faiss  # noqa: F401
+            import numpy  # noqa: F401
+    except Exception:
+        # Defer optional dependency and load failures to the vector database code so
+        # Chroma-only users can still start the MCP server.
+        return
+
+
+_prewarm_native_vector_libraries()
+
+
 def _stdio_safe_tool(tool_function):
     """Keep tool/library prints off stdout, which is reserved for MCP JSON-RPC."""
     signature = inspect.signature(tool_function)
