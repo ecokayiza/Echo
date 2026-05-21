@@ -5,23 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "echo"
 version = "0.1.0"
-description = "Reusable RAG core with FastAPI, React, and Tauri app scaffolds."
+description = "Agentic Retrieval Assistant."
 readme = "readme.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
     "chromadb",
-    "faiss-cpu",
     "fastapi",
     "langgraph",
     "langchain-text-splitters",
     "mcp[cli]",
     "openai",
     "pydantic>=2",
-    "playwright",
     "python-multipart",
     "PyPDF2",
     "PyYAML",
@@ -30,9 +28,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+faiss-backend =[
+    "faiss-cpu",
+]
 local-embeddings = [
     "sentence-transformers",
     "torch",
+]
+retrieval_plugins = [
+    "marker-pdf",
+    "playwright",
 ]
 
 [tool.setuptools.packages.find]

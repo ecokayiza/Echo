@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 from collections.abc import Iterable
 from typing import Any
 
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 DEFAULT_LOCAL_E5_MODEL = "intfloat/e5-base-v2"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8092
+DEFAULT_MODELS_DIR = Path(__file__).resolve().parents[1] / "models"
 
 _MODEL_CACHE: dict[tuple[str, str | None], Any] = {}
 
@@ -87,17 +89,54 @@ def embed_texts(texts: list[str], *, model_name: str = DEFAULT_LOCAL_E5_MODEL, b
 
 def _get_model(model_name: str):
     device = os.getenv("ECHO_LOCAL_EMBEDDING_DEVICE") or None
-    key = (model_name, device)
+    model_path = _resolve_model_path(model_name)
+    key = (model_path, device)
     cached = _MODEL_CACHE.get(key)
     if cached is not None:
         return cached
     sentence_transformer = _load_sentence_transformer_class()
     try:
-        model = sentence_transformer(model_name, device=device) if device else sentence_transformer(model_name)
+        model = sentence_transformer(model_path, device=device) if device else sentence_transformer(model_path)
     except Exception as exc:
-        raise RuntimeError(f"Failed to load local E5 embedding model '{model_name}': {_short_error(exc)}") from exc
+        raise RuntimeError(f"Failed to load local E5 embedding model '{model_name}' from '{model_path}': {_short_error(exc)}") from exc
     _MODEL_CACHE[key] = model
     return model
+
+
+def _resolve_model_path(model_name: str) -> str:
+    model_dir = _local_model_dir(model_name)
+    if _has_model_weights(model_dir):
+        return str(model_dir)
+
+    _download_from_modelscope(model_name, model_dir)
+    if _has_model_weights(model_dir):
+        return str(model_dir)
+
+    raise RuntimeError(f"ModelScope download for '{model_name}' did not create model weights under '{model_dir}'.")
+
+
+def _local_model_dir(model_name: str) -> Path:
+    models_dir = Path(os.getenv("ECHO_MODELS_DIR") or DEFAULT_MODELS_DIR).expanduser()
+    return models_dir / model_name
+
+
+def _has_model_weights(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    return any((path / filename).exists() for filename in ("model.safetensors", "pytorch_model.bin"))
+
+
+def _download_from_modelscope(model_name: str, model_dir: Path):
+    model_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from modelscope.hub.snapshot_download import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError("ModelScope is required to download the local E5 model. Install it with `pip install modelscope`.") from exc
+
+    try:
+        snapshot_download(model_name, local_dir=str(model_dir))
+    except Exception as exc:
+        raise RuntimeError(f"Failed to download ModelScope model '{model_name}' to '{model_dir}': {_short_error(exc)}") from exc
 
 
 def _load_sentence_transformer_class():

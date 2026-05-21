@@ -249,12 +249,17 @@ def extract_tool_calls(raw_response: Any) -> Optional[List[Dict[str, Any]]]:
             arguments = function.get("arguments")
 
         if not name:
-            raise ValueError(f"Tool call is missing a function name: {item!r}")
+            continue
+
+        try:
+            args = _tool_call_arguments(arguments)
+        except (ValueError, json.JSONDecodeError):
+            continue
 
         normalized.append(
             {
                 "name": str(name),
-                "args": _tool_call_arguments(arguments),
+                "args": args,
                 "id": str(item_id or uuid4()),
                 "type": "tool_call",
             }
@@ -273,13 +278,15 @@ def extract_response_tool_calls(raw_response: Any) -> Optional[List[Dict[str, An
         arguments = _field(item, "arguments")
         name = _field(item, "name")
         if not name:
-            if not str(arguments or "").strip():
-                continue
-            raise ValueError(f"Responses API tool call is missing a function name: {item!r}")
+            continue
+        try:
+            args = _tool_call_arguments(arguments)
+        except (ValueError, json.JSONDecodeError):
+            continue
         normalized.append(
             {
                 "name": str(name),
-                "args": _tool_call_arguments(arguments),
+                "args": args,
                 "id": str(_field(item, "call_id") or _field(item, "id") or uuid4()),
                 "type": "tool_call",
             }

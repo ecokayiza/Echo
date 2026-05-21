@@ -7,8 +7,7 @@
   "web_search_backend": "auto",
   "web_fetch_screenshot_mode": false,
   "enabled_skills": [
-    "search",
-    "workspace-files"
+    "search"
   ],
   "default_skills": [
     "search"

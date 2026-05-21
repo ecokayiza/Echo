@@ -32,7 +32,7 @@ class WorkflowDependencies:
 
     model: BaseChatModel
     tool_client: ToolClient
-    max_retrieve_rounds: int = 2
+    max_retrieve_rounds: int = 10
 
 
 async def plan_node(state: WorkflowState, deps: WorkflowDependencies) -> WorkflowState:

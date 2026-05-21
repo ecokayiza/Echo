@@ -5,81 +5,42 @@
 Use `wiki18_100w` as the database with the `E5-base-v2` embedder.
 
 The retrieval corpus is large and must be downloaded manually. Download `wiki18_100w` from ModelScope:
-
 ```text
 https://www.modelscope.cn/datasets/hhjinjiajie/FlashRAG_Dataset/tree/master/retrieval_corpus
 ```
+we have prepared the download script, after it, put the corpus under `tests/data/retrieval_corpus`, including `wiki18_100w.jsonl` and `e5_flat_inner.index`
 
-Keep the corpus outside Git, for example:
-
-```text
-tests/eval/retrieval_corpus/wiki18_100w.zip
-```
-
-Index a small smoke-test slice:
-
+the corpus has prebuilt FAISS index with e5-base-v2, we prepared local embedding model serivce, you can launch it with
 ```bash
-python tests/eval/flashrag_hotpotqa_eval.py ^
-  --index-wiki ^
-  --corpus-path tests/eval/retrieval_corpus/wiki18_100w.zip ^
-  --database-name wiki18_100w ^
-  --embedding-model-name E5-base-v2 ^
-  --backend faiss ^
-  --max-corpus-docs 10000 ^
-  --no-evaluate
+python -m mcp_server.local_e5_embedder --host 127.0.0.1 --port 8101 --model intfloat/e5-base-v2
 ```
 
-Index the full corpus by setting `--max-corpus-docs 0`.
+then **replace search skill  with `SKILL-eval.md`** to allow database_search only for evaluation.
+
+Before testing, you should ***set the active chat and embedding model*** in `models.json`. If the active embedding model points 
 
 ## Train
-
-- 10,000 records.
-- From Natural Questions (NQ) and 2WikiMultihopQA (2Wiki).
+- - From HotpotQA train including 1000 records with easy medium hard:
+- - counts={'easy': 400, 'hard': 300, 'medium': 300};
+- - available={'easy': 17972,'medium': 56814, 'hard': 15661}
+- use chatgpt-5.5
+- replace system prompt with `system-train.yaml` , for `<echo_think>`, include validation deciding if the previous tool call is valid
+- not valid tool call will not be present inside sample
+- only sample with correct final answer will be in trainning dataset
 
 ## Test
-
 - Use HotpotQA as the test dataset.
-- Use F1 score as the metric.
-- The eval script uses the local file at `tests/eval/hotpotqa/dev.jsonl` by default for the `dev` split. Pass `--hotpotqa-path` for a different local JSONL file.
+- Use token-level F1 score as the metric.
 
-Run retrieval evaluation:
-
+eval script launch example:
 ```bash
-python tests/eval/flashrag_hotpotqa_eval.py ^
-  --database-name wiki18_100w ^
-  --hotpotqa-path tests/eval/hotpotqa/dev.jsonl ^
-  --max-questions 50 ^
-  --top-k 4
+python tests/eval/flashrag_hotpotqa_eval.py \
+  --hotpotqa-path tests/data/hotpotqa/dev.jsonl \
+  --max-questions 1000 \
+  --concurrency 8
 ```
+for trainning, use the `tests/data/hotpotqa/train-extrat.jsonl` dataset which includes 1000 questions
 
-Run FlashRAG prebuilt-index evaluation:
-
-First launch the local E5 embedding service manually:
-
-```bash
-python -m mcp_server.local_e5_embedder --host 127.0.0.1 --port 8092 --model intfloat/e5-base-v2
-```
-
-Then run the eval against the prebuilt FAISS index:
-
-```bash
-python tests/eval/flashrag_hotpotqa_eval.py ^
-  --retriever flashrag-index ^
-  --database-name wiki18_100w ^
-  --corpus-path D:\Datasets\FlashRAG\wiki18_100w.jsonl ^
-  --flashrag-index-path D:\Datasets\FlashRAG\wiki18_100w_e5_index\index.faiss ^
-  --hotpotqa-path tests/eval/hotpotqa/dev.jsonl ^
-  --local-e5-base-url http://127.0.0.1:8092/v1 ^
-  --local-e5-model intfloat/e5-base-v2
-```
-
-The script will create `wiki18_100w.jsonl.offsets.u64` automatically when it is missing.
-
-The summary JSON reports:
-
-- `average_f1`: token-overlap F1 between gold answers and retrieved text.
-- `hit_rate`: exact normalized answer string presence in retrieved text.
-- `examples`: sampled questions with retrieved titles and per-example F1.
 
 ## Guidance
 
@@ -93,4 +54,4 @@ Ours:
 - finetuned llama3-8b with the system
 - finetuned qwen3.5-9b with the system
 
-The system uses `database_search` and `web_search`.
+The system uses `database_search` only at eval.
